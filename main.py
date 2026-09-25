@@ -4,6 +4,7 @@
     python main.py sgd -n 1000 --seed 7
     python main.py mlp --start "ROMEO:"
     python main.py torch --device mps
+    python main.py attention --start "ROMEO:"
 """
 import argparse
 
@@ -45,19 +46,32 @@ def build_torch(rng, args):
     loss = mlp_torch.full_loss(model, X_val, Y_val)
     return loss, lambda n, rng, start: mlp_torch.generate(model, n, start)
 
-MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": build_torch}
+def build_attention(rng, args):
+    import torch
+    import attention
+
+    torch.manual_seed(args.seed)
+    train_ids, val_ids = torch.tensor(train), torch.tensor(val)
+    model = attention.AttentionLM()
+    attention.train_model(model, train_ids, val_ids, STEPS=args.steps or 5000)
+    # An estimate from 50 random batches of validation text, as in attention.py.
+    return attention.val_loss(model, val_ids), lambda n, rng, start: attention.generate(model, n, start)
+
+MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": build_torch,
+          "attention": build_attention}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("model", choices=MODELS,
                         help="counts: count table; sgd: bigram trained with gradient descent; "
-                             "mlp: 8-character context; torch: the same MLP in PyTorch")
+                             "mlp: 8-character context; torch: the same MLP in PyTorch; "
+                             "attention: one attention head over 32 characters")
     parser.add_argument("-n", type=int, default=500, help="number of characters to generate (default 500)")
     parser.add_argument("--seed", type=int, default=0, help="random seed for training and sampling (default 0)")
     parser.add_argument("--start", default="\n",
                         help="text to continue from (default newline); the bigrams use its last character")
     parser.add_argument("--smoothing", type=float, default=1, help="counts: pseudo-count added to every pair (default 1)")
-    parser.add_argument("--steps", type=int, help="sgd, mlp, torch: training steps (default 5000 for sgd, 60000 for mlp and torch)")
+    parser.add_argument("--steps", type=int, help="training steps (default 5000 for sgd and attention, 60000 for mlp and torch)")
     parser.add_argument("--device", default="cpu", choices=["cpu", "mps"],
                         help="torch: device to train on; cpu is faster for this model (default cpu)")
     args = parser.parse_args()

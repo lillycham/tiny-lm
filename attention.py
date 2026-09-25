@@ -131,6 +131,25 @@ def train_model(model, train_ids, val_ids, STEPS=5000, B=64, LR=3e-3, log_every=
             print(f"step {step:5d}  train loss {loss.item():.4f}  val loss {val_loss(model, val_ids):.4f}"
                   f"  ({time.time() - start:.0f}s)")
 
+# ---------- generate text ----------
+@torch.no_grad()
+def generate(model, n, start="\n"):
+    """Sample n characters that follow the text `start`.
+
+    No padding needed, unlike the MLP: attention works on any length up to BLOCK.
+    Longer contexts are cut to their last BLOCK characters, because there are only
+    BLOCK position embeddings.
+    """
+    ids = encode(start).tolist()
+    out = []
+    for _ in range(n):
+        logits, _ = model(torch.tensor([ids[-BLOCK:]]))
+        # Only the last position's prediction matters: it predicts the next character.
+        char_next = torch.multinomial(F.softmax(logits[0, -1], dim=-1), 1).item()
+        ids.append(char_next)
+        out.append(char_next)
+    return decode(out)
+
 # ---------- checks ----------
 def show(weights, labels):
     """Print a (T, T) weight matrix with the characters along both edges."""
