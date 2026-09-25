@@ -47,15 +47,17 @@ for step in range(STEPS + 1):
 
     P = softmax(W[xb])                       # (BATCH, V)
 
-    # TODO(Lilly): gradient of the mean loss with respect to the logits, `d_logits`.
-    #   With softmax + cross-entropy it's P - one_hot(yb), divided by BATCH.
-    #   Copy P, subtract 1 at each row's correct character, then divide.
+    # gradient of the mean loss with respect to the logits, `d_logits`.
+    d_logits = P.copy()
+    d_logits[np.arange(BATCH), yb] -= 1
+    d_logits /= BATCH
 
-    # TODO(Lilly): gradient for W, `gW`. Each example used row W[xb[i]], so its
-    #   gradient row d_logits[i] belongs in gW[xb[i]]. Rows used more than once
-    #   need all their gradients added up. You've used the right tool for that before.
+    # gradient for W, `gW`.
+    gW = np.zeros_like(W)
+    np.add.at(gW, xb, d_logits)
 
     # TODO(Lilly): the gradient descent step.
+    W -= LR * gW
 
 # ---------- compare with the count table ----------
 # If training worked, the learned probabilities should be close to the counted ones.
