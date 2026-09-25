@@ -6,15 +6,10 @@ should bring the validation loss close to the count-based model's 2.48.
 """
 import numpy as np
 
-from data import V, decode, train, val
-
-rng = np.random.default_rng(0)
+from data import V, train, val
 
 x_train, y_train = train[:-1], train[1:]
 x_val, y_val = val[:-1], val[1:]
-
-# Small random logits, so every row starts close to uniform (loss ~ ln(65) = 4.17).
-W = rng.normal(0, 0.01, size=(V, V))
 
 def softmax(logits):
     """
@@ -24,7 +19,7 @@ def softmax(logits):
     e = np.exp(shifted)
     return e / e.sum(axis=1, keepdims=True)
 
-def loss(x, y):
+def loss(W, x, y):
     """
     mean negative log-likelihood of the pairs (x, y) under W.
     """
@@ -35,38 +30,46 @@ def loss(x, y):
     return neg_log.mean()
 
 # ---------- training ----------
-LR, STEPS, BATCH = 50, 5000, 1024
+def train_probs(rng, LR=50, STEPS=5000, BATCH=1024, log_every=500):
+    """Train W with gradient descent and return its (V, V) probability table."""
+    # Small random logits, so every row starts close to uniform (loss ~ ln(65) = 4.17).
+    W = rng.normal(0, 0.01, size=(V, V))
 
-for step in range(STEPS + 1):
-    if step % 500 == 0:
-        print(f"step {step:5d}  val loss {loss(x_val, y_val):.4f}")
+    for step in range(STEPS + 1):
+        if log_every and step % log_every == 0:
+            print(f"step {step:5d}  val loss {loss(W, x_val, y_val):.4f}")
 
-    # A random mini-batch of pairs.
-    idx = rng.integers(0, len(x_train), BATCH)
-    xb, yb = x_train[idx], y_train[idx]
+        # A random mini-batch of pairs.
+        idx = rng.integers(0, len(x_train), BATCH)
+        xb, yb = x_train[idx], y_train[idx]
 
-    P = softmax(W[xb])                       # (BATCH, V)
+        P = softmax(W[xb])                       # (BATCH, V)
 
-    # gradient of the mean loss with respect to the logits, `d_logits`.
-    d_logits = P.copy()
-    d_logits[np.arange(BATCH), yb] -= 1
-    d_logits /= BATCH
+        # gradient of the mean loss with respect to the logits, `d_logits`.
+        d_logits = P.copy()
+        d_logits[np.arange(BATCH), yb] -= 1
+        d_logits /= BATCH
 
-    # gradient for W, `gW`.
-    gW = np.zeros_like(W)
-    np.add.at(gW, xb, d_logits)
+        # gradient for W, `gW`.
+        gW = np.zeros_like(W)
+        np.add.at(gW, xb, d_logits)
 
-    # TODO(Lilly): the gradient descent step.
-    W -= LR * gW
+        # the gradient descent step.
+        W -= LR * gW
 
-# ---------- compare with the count table ----------
-# If training worked, the learned probabilities should be close to the counted ones.
-counts = np.zeros((V, V))
-np.add.at(counts, (x_train, y_train), 1)
-count_probs = (counts + 1) / (counts + 1).sum(axis=1, keepdims=True)
-learned_probs = softmax(W)
-# Rare characters (like '$') turn up in few batches, so their rows barely train.
-# Compare only the characters that appear at least 1,000 times.
-common = counts.sum(axis=1) >= 1000
-diff = np.abs(learned_probs - count_probs)[common].max()
-print(f"\nlargest difference from the count table, common characters: {diff:.3f}")
+    return softmax(W)
+
+if __name__ == "__main__":
+    from bigram import count_probs
+
+    learned_probs = train_probs(np.random.default_rng(0))
+
+    # ---------- compare with the count table ----------
+    # If training worked, the learned probabilities should be close to the counted ones.
+    counts = np.zeros((V, V))
+    np.add.at(counts, (x_train, y_train), 1)
+    # Rare characters (like '$') turn up in few batches, so their rows barely train.
+    # Compare only the characters that appear at least 1,000 times.
+    common = counts.sum(axis=1) >= 1000
+    diff = np.abs(learned_probs - count_probs())[common].max()
+    print(f"\nlargest difference from the count table, common characters: {diff:.3f}")
