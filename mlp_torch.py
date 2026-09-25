@@ -32,10 +32,10 @@ def windows(ids):
 class MLP(nn.Module):
     def __init__(self):
         super().__init__()
-        # TODO(Lilly): create the three layers as attributes, so PyTorch tracks their parameters:
-        #   self.C  = nn.Embedding(V, EMB)          the (V, EMB) lookup table, like C in mlp.py
-        #   self.l1 = nn.Linear(in_size, out_size)  holds W1 and b1. What are the two sizes?
-        #   self.l2 = nn.Linear(...)                holds W2 and b2.
+        # create the three layers as attributes, so PyTorch tracks their parameters:
+        self.C  = nn.Embedding(V, EMB)
+        self.l1 = nn.Linear(BLOCK * EMB, HIDDEN)
+        self.l2 = nn.Linear(HIDDEN, V)
 
         # Start with tiny output weights, as in mlp.py, so the starting loss is about ln(65).
         # (nn.Linear already scales its weights by 1/sqrt(in_size), like our W1.)
@@ -45,14 +45,13 @@ class MLP(nn.Module):
 
     def forward(self, X):
         """Logits of shape (B, V) for a batch X of shape (B, BLOCK)."""
-        # TODO(Lilly): the same steps as forward() in mlp.py, but return the logits, not P.
-        #   self.C(X) does the lookup, like C[X]. Then flatten to (B, BLOCK * EMB):
-        #   .flatten(1) keeps axis 0 and joins the rest, like reshape(len(X), -1).
-        #   Layers are called like functions: self.l1(E) computes E @ W1 + b1.
-        #   torch.tanh works like np.tanh.
-        #   No softmax: F.cross_entropy takes logits and does the softmax itself,
-        #   in a way that stays accurate even for very large or small logits.
-        ...
+        E = self.C(X).flatten(1)
+
+        H = torch.tanh(self.l1(E))
+
+        logits = self.l2(H)
+
+        return logits
 
 @torch.no_grad()   # no gradients needed, so PyTorch can skip the autograd bookkeeping
 def full_loss(model, X, Y, chunk=50_000):
@@ -72,11 +71,11 @@ def train_model(model, X_train, Y_train, X_val, Y_val, LR=0.2, STEPS=60_000, BAT
         idx = torch.randint(0, len(X_train), (BATCH,), device=X_train.device)
         xb, yb = X_train[idx], Y_train[idx]
 
-        # TODO(Lilly): one training step, in four lines:
-        #   1. loss = F.cross_entropy(logits, targets)    the mean NLL, like loss() in mlp.py
-        #   2. opt.zero_grad()    PyTorch *adds* new gradients to old ones, so clear them first
-        #   3. loss.backward()    autograd: fills in p.grad for every parameter p
-        #   4. opt.step()         p -= lr * p.grad for every parameter
+        loss = F.cross_entropy(model(xb), yb)
+
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
 
         sched.step()
 
