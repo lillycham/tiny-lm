@@ -35,15 +35,23 @@ print(f"vocab size {V}, train pairs {len(x_train):,}, val pairs {len(x_val):,}")
 print("example pairs:", [(itos[a], itos[b]) for a, b in zip(x_train[:8], y_train[:8])])
 
 # ---------- step 1: count-based bigram ----------
-# TODO(Lilly): build a (V, V) array `counts` where counts[a, b] is how many times
-#   character b follows character a in the training pairs.
-#   Hint: np.add.at(array, (rows, cols), 1) adds 1 at every (row, col) pair,
-#   including repeated pairs. (Plain `counts[x, y] += 1` counts each pair only once.)
 
-# TODO(Lilly): turn `counts` into a (V, V) array `probs`, where each row sums to 1.
-#   Row a is then the model's probability distribution for the character after a.
-#   Question to think about: what happens to a pair that never appears in training?
+# Initialise the counts - a (V, V) array. Each counts[a, b] is how many times char
+# b follows a in the training pairs.
+counts = np.zeros((V, V), dtype=int)
 
-# TODO(Lilly): compute the average negative log-likelihood on the validation pairs:
-#   the mean of -log(probs[x, y]) over all (x, y) in (x_val, y_val).
-#   That's the same cross-entropy loss as the circle classifier, with V classes instead of 2.
+# Smoothing value
+S = 1
+
+np.add.at(counts, (x_train, y_train), 1)
+
+
+# Initialising the probability array - row A is the probability distribution for
+# each character after a.
+probs = (counts + S) / (counts + S).sum(axis=1, keepdims=True)
+
+# Compute the avg. neg. log-likelihood on validation pairs
+neg_log = -np.log(probs[x_val, y_val])
+
+val_loss = neg_log.mean()
+print(f"negative log-likelihood: {val_loss}")
