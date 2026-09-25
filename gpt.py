@@ -59,23 +59,14 @@ class CausalSelfAttention(nn.Module):
     def split_heads(self, t):
         """(B, T, C) -> (B, n_head, T, hs), where hs = C // n_head."""
         B, T, C = t.shape
-        # TODO(Lilly): two steps.
-        #   1. t.view(B, T, n_head, hs) cuts each position's C numbers into n_head
-        #      pieces of hs numbers: head 0 gets the first hs, head 1 the next hs, ...
-        #   2. .transpose(1, 2) swaps the T and n_head axes, so each head has its own
-        #      (T, hs) block, as attention() needs.
-        ...
+
+        return t.view(B, T, self.n_head, C // self.n_head).transpose(1,2)
 
     def join_heads(self, t):
         """(B, n_head, T, hs) -> (B, T, C). The opposite of split_heads."""
         B, n_head, T, hs = t.shape
-        # TODO(Lilly): undo split_heads, in the opposite order.
-        #   1. .transpose(1, 2) back to (B, T, n_head, hs).
-        #   2. .reshape(B, T, n_head * hs) puts each position's heads side by side,
-        #      like torch.cat(head_outs, dim=-1) did.
-        #   (reshape, not view: after a transpose the numbers aren't in order in memory,
-        #   and view only works when they are. reshape makes a copy when it must.)
-        ...
+
+        return t.transpose(1,2).reshape(B, T, n_head * hs)
 
     def forward(self, x):
         """x (B, T, C) -> (B, T, C)."""
@@ -86,7 +77,13 @@ class CausalSelfAttention(nn.Module):
         #   2. split_heads on each of q, k and v.
         #   3. attention(q, k, v), which returns (out, weights).
         #   4. join_heads on out, then self.proj, then self.drop.
-        ...
+        q, k, v = self.qkv(x).split(C, dim=-1)
+
+        q, k, v = self.split_heads(q), self.split_heads(k), self.split_heads(v)
+
+        out, _ = attention(q, k, v)
+        
+        return self.drop(self.proj(self.join_heads(out)))
 
 class FeedForward(nn.Module):
     """As in transformer.py, with dropout at the end."""
