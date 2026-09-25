@@ -9,12 +9,18 @@
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShell {
-          packages = [
-            (pkgs.python3.withPackages (ps: [ ps.numpy ps.torch ]))
-          ];
-        };
-      });
+      devShells = forAllSystems (pkgs:
+        let
+          pythonEnv = pkgs.python3.withPackages (ps: [ ps.numpy ps.torch ]);
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [ pythonEnv ];
+            # A fixed path to this Python for editors, because the store path changes on every update.
+            shellHook = ''
+              ln -sfn ${pythonEnv} .python-env
+            '';
+          };
+        });
     };
 }
