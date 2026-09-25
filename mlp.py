@@ -88,24 +88,30 @@ def grads(params, X, Y):
     B = len(X)
     E, H, P = forward(params, X)
 
-    # TODO(Lilly): d_logits, shape (B, V). Same as bigram_sgd.py.
+    # gradient of the mean loss with respect to the logits, `d_logits`.
+    d_logits = P.copy()
+    d_logits[np.arange(B), Y] -= 1
+    d_logits /= B
 
-    # TODO(Lilly): output layer. The layer was logits = H @ W2 + b2, so:
-    #   gW2 = H.T @ d_logits           (300, B) @ (B, 65) -> (300, 65), same shape as W2
-    #   gb2 = d_logits summed over the batch axis, shape (65,)
-    #   dH  = d_logits @ W2.T          the gradient flowing back into H, shape (B, 300)
+    # output layer
+    gW2 = H.T @ d_logits
+    gb2 = d_logits.sum(axis=0)
+    dH = d_logits @ W2.T
 
-    # TODO(Lilly): through tanh. H = tanh(z), and tanh'(z) = 1 - H**2.
-    #   dz = dH times that, element by element. Shape (B, 300).
+    # hidden layer 
+    dz = dH * (1 - H**2)
 
-    # TODO(Lilly): hidden layer. It was z = E @ W1 + b1, so this is the same pattern as the
-    #   output layer: gW1 from E and dz, gb1 by summing dz, and dE flowing back into E.
-    #   Check that each gradient has the same shape as its parameter.
+    gW1 = E.T @ dz
+    gb1 = dz.sum(axis=0)
+    dE = dz @ W1.T
 
-    # TODO(Lilly): embeddings. E was C[X] reshaped to (B, BLOCK * EMB).
-    #   1. Undo the reshape: dE back to (B, BLOCK, EMB), the shape C[X] had.
-    #   2. Scatter-add into gC = np.zeros_like(C) with np.add.at, indexed by X.
-    #      Each of the B * BLOCK looked-up rows sends its gradient back to the row of C it came from.
+    # embeddings
+    # reshape dE back to (B, BLOCK, EMB), the shape C[X] had.
+    dE3 = np.reshape(dE, (B,BLOCK,EMB))
+
+    # scatter-add into gC = np.zeros_like(C) with np.add.at, indexed by X.
+    gC = np.zeros_like(C)
+    np.add.at(gC, X, dE3)
 
     return {"C": gC, "W1": gW1, "b1": gb1, "W2": gW2, "b2": gb2}
 
@@ -140,8 +146,9 @@ def train_model(params, rng, LR=0.2, STEPS=60_000, BATCH=128, log_every=5_000):
         # instead of bouncing around the minimum.
         lr = LR if step <= 0.75 * STEPS else LR / 10
 
-        # TODO(Lilly): the gradient descent step, for every parameter in params.
-        #   Loop over the names, and update each array in place with -=.
+        # the gradient descent step, for every parameter in params.
+        for name in params:
+            params[name] -= lr * g[name]
 
         if log_every and step % log_every == 0:
             # Training loss on a 200k sample, so the check stays quick.
