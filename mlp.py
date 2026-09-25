@@ -81,9 +81,82 @@ def full_loss(params, X, Y, chunk=20_000):
         total += loss(params, X[i:i + chunk], Y[i:i + chunk]) * len(X[i:i + chunk])
     return total / len(X)
 
+# ---------- backward pass ----------
+def grads(params, X, Y):
+    """Gradients of loss(params, X, Y) for every parameter, as a dict with the same keys as params."""
+    C, W1, b1, W2, b2 = (params[k] for k in ("C", "W1", "b1", "W2", "b2"))
+    B = len(X)
+    E, H, P = forward(params, X)
+
+    # TODO(Lilly): d_logits, shape (B, V). Same as bigram_sgd.py.
+
+    # TODO(Lilly): output layer. The layer was logits = H @ W2 + b2, so:
+    #   gW2 = H.T @ d_logits           (300, B) @ (B, 65) -> (300, 65), same shape as W2
+    #   gb2 = d_logits summed over the batch axis, shape (65,)
+    #   dH  = d_logits @ W2.T          the gradient flowing back into H, shape (B, 300)
+
+    # TODO(Lilly): through tanh. H = tanh(z), and tanh'(z) = 1 - H**2.
+    #   dz = dH times that, element by element. Shape (B, 300).
+
+    # TODO(Lilly): hidden layer. It was z = E @ W1 + b1, so this is the same pattern as the
+    #   output layer: gW1 from E and dz, gb1 by summing dz, and dE flowing back into E.
+    #   Check that each gradient has the same shape as its parameter.
+
+    # TODO(Lilly): embeddings. E was C[X] reshaped to (B, BLOCK * EMB).
+    #   1. Undo the reshape: dE back to (B, BLOCK, EMB), the shape C[X] had.
+    #   2. Scatter-add into gC = np.zeros_like(C) with np.add.at, indexed by X.
+    #      Each of the B * BLOCK looked-up rows sends its gradient back to the row of C it came from.
+
+    return {"C": gC, "W1": gW1, "b1": gb1, "W2": gW2, "b2": gb2}
+
+def grad_check(params, X, Y, checks=3, eps=1e-5):
+    """Compare grads() with a numerical estimate on a few entries of each parameter."""
+    g = grads(params, X, Y)
+    check_rng = np.random.default_rng(1)
+    for name, p in params.items():
+        for _ in range(checks):
+            if name == "C":
+                # Only rows of characters in this batch get a gradient, so check one of those.
+                i = (int(check_rng.choice(X.ravel())), int(check_rng.integers(EMB)))
+            else:
+                i = tuple(int(check_rng.integers(0, s)) for s in p.shape)
+            old = p[i]
+            p[i] = old + eps
+            up = loss(params, X, Y)
+            p[i] = old - eps
+            down = loss(params, X, Y)
+            p[i] = old
+            numeric = (up - down) / (2 * eps)
+            print(f"{name:>2}{str(i):>12}  yours {g[name][i]: .8f}  numeric {numeric: .8f}")
+
+# ---------- training ----------
+def train_model(params, rng, LR=0.2, STEPS=60_000, BATCH=128, log_every=5_000):
+    """Train params in place with mini-batch gradient descent."""
+    for step in range(1, STEPS + 1):
+        idx = rng.integers(0, len(X_train), BATCH)
+        g = grads(params, X_train[idx], Y_train[idx])
+
+        # Learning-rate decay: smaller steps for the last quarter, so the weights settle
+        # instead of bouncing around the minimum.
+        lr = LR if step <= 0.75 * STEPS else LR / 10
+
+        # TODO(Lilly): the gradient descent step, for every parameter in params.
+        #   Loop over the names, and update each array in place with -=.
+
+        if log_every and step % log_every == 0:
+            # Training loss on a 200k sample, so the check stays quick.
+            train_loss = full_loss(params, X_train[:200_000], Y_train[:200_000])
+            print(f"step {step:6d}  train loss {train_loss:.4f}  val loss {full_loss(params, X_val, Y_val):.4f}")
+
 if __name__ == "__main__":
     print(f"X_train {X_train.shape}, Y_train {Y_train.shape}")
     n_params = sum(p.size for p in params.values())
     print(f"{n_params:,} parameters")
     # Before any training, this should be close to ln(65) = 4.17.
     print(f"starting val loss {full_loss(params, X_val, Y_val):.4f}")
+
+    print("\ngradient check, on 32 examples:")
+    grad_check(params, X_train[:32], Y_train[:32])
+
+    print("\ntraining:")
+    train_model(params, rng)
