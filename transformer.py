@@ -37,12 +37,11 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         """x (B, T, C) -> (B, T, C)."""
-        # TODO(Lilly): three steps.
-        #   1. Call every head on x. A head returns (out, weights); keep only out.
-        #   2. Join the outs along the last axis: torch.cat(list_of_tensors, dim=-1).
-        #      n_head tensors of (B, T, hs) become one (B, T, n_head * hs) = (B, T, C).
-        #   3. Return self.proj of the result.
-        ...
+        head_outs = [out for out, _ in (h(x) for h in self.heads)]
+
+        joined = torch.cat(head_outs, dim=-1)
+
+        return self.proj(joined)
 
 class FeedForward(nn.Module):
     """The hidden layer: the same small MLP on every position, separately.
@@ -53,11 +52,7 @@ class FeedForward(nn.Module):
 
     def __init__(self, C):
         super().__init__()
-        # TODO(Lilly): self.net = nn.Sequential(layer, layer, layer), which calls its
-        #   layers in order. The same shape as your MLP's hidden layer:
-        #   a Linear from C to 4 * C, then nn.ReLU(), then a Linear from 4 * C back to C.
-        #   (ReLU is max(0, x): it works like tanh here, but doesn't saturate for big x.)
-        ...
+        self.net = nn.Sequential(nn.Linear(C, 4 * C), nn.ReLU(), nn.Linear(4 * C, C))
 
     def forward(self, x):
         return self.net(x)
@@ -82,9 +77,10 @@ class Block(nn.Module):
 
     def forward(self, x):
         """x (B, T, C) -> (B, T, C)."""
-        # TODO(Lilly): the two lines from the docstring at the top of the file:
-        #   x = x + attention of (layer norm 1 of x), then the same with ln2 and ffwd.
-        ...
+        x = x + self.attn(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+
+        return x
 
 # ---------- the model ----------
 class TransformerLM(nn.Module):
