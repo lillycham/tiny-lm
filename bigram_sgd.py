@@ -17,19 +17,22 @@ x_val, y_val = val[:-1], val[1:]
 W = rng.normal(0, 0.01, size=(V, V))
 
 def softmax(logits):
-    # TODO(Lilly): turn each row of `logits` (shape (B, V)) into probabilities.
-    #   exp every value, then divide each row by its row total (keepdims again).
-    #   Tip: subtract each row's max before exp, i.e. logits - logits.max(axis=1, keepdims=True).
-    #   It gives the same result, but stops exp overflowing on big logits.
-    ...
+    """
+    turn each row of `logits` (shape (B, V)) into probabilities.
+    """
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    e = np.exp(shifted)
+    return e / e.sum(axis=1, keepdims=True)
 
 def loss(x, y):
-    # TODO(Lilly): mean negative log-likelihood of the pairs (x, y) under W.
-    #   W[x] picks one row of logits per example, giving shape (len(x), V).
-    #   Then it's the same as your bigram loss, except the probabilities come
-    #   from softmax, and you index them with (np.arange(len(y)), y) to take
-    #   the correct character's probability from each row.
-    ...
+    """
+    mean negative log-likelihood of the pairs (x, y) under W.
+    """
+    P = softmax(W[x])
+    correct = P[(np.arange(len(y)), y)]
+    neg_log = -np.log(correct)
+
+    return neg_log.mean()
 
 # ---------- training ----------
 LR, STEPS, BATCH = 50, 5000, 1024
