@@ -86,12 +86,19 @@ class AttentionLM(nn.Module):
         self.head = Head(EMB, EMB)
         self.out = nn.Linear(EMB, V)
 
+    def embed(self, X):
+        """X (B, T) IDs -> character + position embeddings (B, T, EMB)."""
+        return self.tok(X) + self.pos(torch.arange(X.shape[1], device=X.device))
+
     def forward(self, X):
-        """X (B, T) IDs -> (logits (B, T, V), weights (B, T, T))."""
-        T = X.shape[1]
-        x = self.tok(X) + self.pos(torch.arange(T, device=X.device))
-        h, weights = self.head(x)
-        return self.out(h), weights
+        """X (B, T) IDs -> logits (B, T, V)."""
+        h, _ = self.head(self.embed(X))
+        return self.out(h)
+
+    def weights(self, X):
+        """X (B, T) IDs -> the head's attention weights (B, T, T)."""
+        _, weights = self.head(self.embed(X))
+        return weights
 
 def batch(ids, B):
     """B random chunks of BLOCK characters, and the same chunks shifted by one.
@@ -105,7 +112,7 @@ def batch(ids, B):
     return X, Y
 
 def lm_loss(model, X, Y):
-    logits, _ = model(X)
+    logits = model(X)
     # cross_entropy wants (N, V) logits, so join the B and T axes.
     return F.cross_entropy(logits.flatten(0, 1), Y.flatten())
 
@@ -143,7 +150,7 @@ def generate(model, n, start="\n"):
     ids = encode(start).tolist()
     out = []
     for _ in range(n):
-        logits, _ = model(torch.tensor([ids[-BLOCK:]]))
+        logits = model(torch.tensor([ids[-BLOCK:]]))
         # Only the last position's prediction matters: it predicts the next character.
         char_next = torch.multinomial(F.softmax(logits[0, -1], dim=-1), 1).item()
         ids.append(char_next)
@@ -206,7 +213,7 @@ if __name__ == "__main__":
     train_model(model, train_ids, val_ids)
 
     text = "ROMEO:\nWhat light through yonder"
-    _, weights = model(torch.tensor(encode(text)).unsqueeze(0))
+    weights = model.weights(torch.tensor(encode(text)).unsqueeze(0))
     print(f"\n   Where the trained head looks, for the last 8 characters of {text!r}:")
     show(weights[0, -8:, -8:], text[-8:])
     print("   (Rows that don't sum to 1 put the rest of their weight on earlier characters.)")
