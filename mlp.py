@@ -30,11 +30,9 @@ def windows(ids):
         X = [[a, b, c],      Y = [d,
              [b, c, d]]           e]
     """
-    # TODO(Lilly): build X with shape (len(ids) - BLOCK, BLOCK) and Y with shape (len(ids) - BLOCK,).
-    #   A list comprehension over i with slices works, but it's slow on a million characters.
-    #   Faster: np.lib.stride_tricks.sliding_window_view(ids, BLOCK) gives every window
-    #   of length BLOCK. Check which windows you need to drop so X and Y line up.
-    ...
+    X = np.lib.stride_tricks.sliding_window_view(ids[:-1], BLOCK)
+    Y = ids[BLOCK:]
+    return X, Y
 
 X_train, Y_train = windows(train)
 X_val, Y_val = windows(val)
@@ -57,16 +55,24 @@ def forward(params, X):
     # TODO(Lilly): E = the embeddings of every ID in X, concatenated per example.
     #   C[X] looks up a row of C for every ID. Check its shape, then reshape it to (B, BLOCK * EMB).
     #   Tip: .reshape(len(X), -1) lets NumPy work out the second size.
+    E = C[X].reshape(len(X), -1)
 
     # TODO(Lilly): H = the tanh hidden layer. Same shape of formula as the circle classifier.
+    H = np.tanh(E @ W1 + b1)
 
     # TODO(Lilly): P = softmax of the output logits.
-    ...
+    P = softmax(H @ W2 + b2)
+    return E, H, P
 
 def loss(params, X, Y):
     """Mean negative log-likelihood of the examples (X, Y)."""
     # TODO(Lilly): the same loss as bigram_sgd.py, with P from forward().
-    ...
+    _,_,P = forward(params, X)
+    correct = P[(np.arange(len(Y)), Y)]
+    neg_log = -np.log(correct)
+
+    return neg_log.mean()
+
 
 def full_loss(params, X, Y, chunk=20_000):
     """loss() over a big dataset, in chunks so the arrays stay a sensible size."""
