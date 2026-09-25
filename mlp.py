@@ -13,7 +13,7 @@ Shapes, for a batch of B examples:
 import numpy as np
 
 from bigram_sgd import softmax
-from data import V, train, val
+from data import V, decode, stoi, train, val
 
 BLOCK = 8      # characters of context
 EMB = 16       # size of each character's embedding vector
@@ -147,6 +147,23 @@ def train_model(params, rng, LR=0.2, STEPS=60_000, BATCH=128, log_every=5_000):
             # Training loss on a 200k sample, so the check stays quick.
             train_loss = full_loss(params, X_train[:200_000], Y_train[:200_000])
             print(f"step {step:6d}  train loss {train_loss:.4f}  val loss {full_loss(params, X_val, Y_val):.4f}")
+
+# ---------- generate text ----------
+def generate(params, n, rng, start="\n"):
+    """Sample n characters, continuing from the text `start`.
+
+    The model always needs BLOCK characters of context, so a short start is padded
+    on the left with newlines, and a long one is cut to its last BLOCK characters.
+    """
+    context = ([stoi["\n"]] * BLOCK + [stoi[c] for c in start])[-BLOCK:]
+    out = []
+    for _ in range(n):
+        _, _, P = forward(params, np.array([context]))
+        char_next = rng.choice(V, p=P[0])
+        out.append(char_next)
+        # Slide the window along: drop the oldest character, add the new one.
+        context = context[1:] + [char_next]
+    return decode(out)
 
 if __name__ == "__main__":
     print(f"X_train {X_train.shape}, Y_train {Y_train.shape}")
