@@ -55,3 +55,15 @@ neg_log = -np.log(probs[x_val, y_val])
 
 val_loss = neg_log.mean()
 print(f"negative log-likelihood: {val_loss}")
+
+# ---------- generate text ----------
+def generate(n, start="\n"):
+    current = stoi[start]
+    out = []
+    for _ in range(n):
+        char_next = rng.choice(V, p=probs[current])
+        out.append(char_next)
+        current = char_next
+    return decode(out)
+
+print(generate(500))
