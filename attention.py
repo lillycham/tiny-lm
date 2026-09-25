@@ -32,23 +32,20 @@ def causal_weights(scores):
     Row t may only use positions 0..t: a position must not see the characters after
     it, because those are what the model has to predict. Each row must sum to 1.
     """
-    # TODO(Lilly): two steps.
-    #   1. Hide the future: set every score above the diagonal (s > t) to -inf.
-    #      torch.ones(T, T).tril() is 1 on and below the diagonal, 0 above it.
-    #      scores.masked_fill(mask, value) returns a copy with value wherever mask is True.
-    #      T is scores.shape[-1].
-    #   2. Softmax along the last axis: F.softmax(x, dim=-1). exp(-inf) is 0,
-    #      so the hidden positions get weight 0.
-    ...
+    # Hide the future
+    x = scores.masked_fill(
+        torch.ones(scores.shape[-1], scores.shape[-1], device=scores.device).tril() == 0, -torch.inf)
+
+    # Softmax along the last axis
+    return F.softmax(x, dim=-1)
 
 def attention(q, k, v):
     """Causal attention. q, k and v have shape (B, T, hs). Returns (out, weights)."""
-    # TODO(Lilly): three steps, following the formulas at the top of the file.
-    #   1. scores: q @ k^T, divided by sqrt(hs). k^T here swaps only the last two axes,
-    #      so use k.transpose(-2, -1), not k.T. hs is q.shape[-1].
-    #   2. weights: causal_weights(scores).
-    #   3. out: weights @ v.
-    ...
+    scores = (q @ k.transpose(-2, -1)) / math.sqrt(q.shape[-1])
+    weights = causal_weights(scores)
+    out = weights @ v
+
+    return out, weights
 
 class Head(nn.Module):
     """One attention head: project x to q, k and v, then attend."""
@@ -62,8 +59,13 @@ class Head(nn.Module):
 
     def forward(self, x):
         """x (B, T, C) -> (out (B, T, hs), weights (B, T, T))."""
-        # TODO(Lilly): compute q, k and v from x with the three layers, then call attention().
-        ...
+        q = self.query(x)
+        k = self.key(x)
+        v = self.value(x)
+
+        attn = attention(q, k, v)
+
+        return attn
 
 # ---------- a tiny model to train ----------
 BLOCK, EMB = 32, 32
