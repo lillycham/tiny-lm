@@ -121,6 +121,58 @@ python main.py tokens --start "Once upon a time, Tom's cat sat."
 The trained models load their checkpoints from `checkpoints/`, so run the step
 that trains them first. Use `python main.py --help` for all options.
 
+## References
+
+The work this repo builds on, in the order it appears.
+
+**Data and path**
+- Andrej Karpathy, [char-rnn](https://github.com/karpathy/char-rnn) (2015): the Tiny Shakespeare dataset. The
+  bigram-to-GPT path follows the one in his [nanoGPT](https://github.com/karpathy/nanoGPT) and makemore work.
+- Ronen Eldan and Yuanzhi Li, [TinyStories: How Small Can Language Models Be and Still Speak Coherent
+  English?](https://arxiv.org/abs/2305.07759) (2023): the TinyStories and TinyStoriesInstruct datasets.
+
+**Models**
+- Yoshua Bengio et al., [A Neural Probabilistic Language Model](https://www.jmlr.org/papers/v3/bengio03a.html)
+  (JMLR, 2003): `mlp.py`.
+- Ashish Vaswani et al., [Attention Is All You Need](https://arxiv.org/abs/1706.03762) (2017): attention and
+  the transformer block.
+- Kaiming He et al., [Deep Residual Learning for Image Recognition](https://arxiv.org/abs/1512.03385) (2016):
+  residual connections.
+- Jimmy Lei Ba, Jamie Ryan Kiros and Geoffrey Hinton, [Layer Normalization](https://arxiv.org/abs/1607.06450)
+  (2016).
+- Ruibin Xiong et al., [On Layer Normalization in the Transformer
+  Architecture](https://arxiv.org/abs/2002.04745) (2020): pre-norm.
+- Nitish Srivastava et al., [Dropout](https://jmlr.org/papers/v15/srivastava14a.html) (JMLR, 2014).
+- Alec Radford et al., [Language Models are Unsupervised Multitask
+  Learners](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
+  (2019): GPT-2, the shape of the story model.
+- Dan Hendrycks and Kevin Gimpel, [Gaussian Error Linear Units (GELUs)](https://arxiv.org/abs/1606.08415) (2016).
+- Ofir Press and Lior Wolf, [Using the Output Embedding to Improve Language
+  Models](https://arxiv.org/abs/1608.05859) (2017): tied embeddings.
+
+**Tokenisers**
+- Rico Sennrich, Barry Haddow and Alexandra Birch, [Neural Machine Translation of Rare Words with Subword
+  Units](https://arxiv.org/abs/1508.07909) (2016): BPE for language models. `word_bpe.py` splits words the
+  GPT-2 way.
+
+**Training**
+- Ilya Loshchilov and Frank Hutter, [Decoupled Weight Decay Regularization](https://arxiv.org/abs/1711.05101)
+  (2019): AdamW.
+- Ilya Loshchilov and Frank Hutter, [SGDR: Stochastic Gradient Descent with Warm
+  Restarts](https://arxiv.org/abs/1608.03983) (2017): the cosine learning-rate schedule.
+- Jordan Hoffmann et al., [Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556)
+  (2022): about 20 training tokens per parameter.
+- Long Ouyang et al., [Training Language Models to Follow Instructions with Human
+  Feedback](https://arxiv.org/abs/2203.02155) (2022): supervised fine-tuning.
+
+**Interpretability**
+- Nelson Elhage et al., [A Mathematical Framework for Transformer
+  Circuits](https://transformer-circuits.pub/2021/framework/index.html) (2021): the residual stream view.
+- Catherine Olsson et al., [In-context Learning and Induction Heads](https://arxiv.org/abs/2209.11895) (2022):
+  the induction-head test, and smeared keys.
+- Kevin Wang et al., [Interpretability in the Wild](https://arxiv.org/abs/2211.00593) (2022): indirect object
+  identification, the "who gets the ball" test.
+
 ## Licence
 
 MIT. See `LICENSE`.
