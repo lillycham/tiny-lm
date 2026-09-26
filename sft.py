@@ -131,7 +131,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
     parser.add_argument("--steps", type=int, default=600, help="fine-tuning steps (default 600)")
+    parser.add_argument("--base", type=Path, default=stories_gpt.CHECKPOINT,
+                        help=f"the model to fine-tune (default {stories_gpt.CHECKPOINT})")
     args = parser.parse_args()
+    out = stories_gpt.fine_tuned_path(CHECKPOINT, args.base)
     tok = WordBPE.load(TOKENISER)
 
     x, y = make_example(tok, prompt("Lily"), "Once upon a time.")
@@ -149,7 +152,7 @@ if __name__ == "__main__":
     X, Y = X[n_val:], Y[n_val:]
     print(f"\n2. {len(X):,} training and {n_val} validation conversations, {len(seen)} names ({time.time() - t:.0f}s)")
 
-    model = gpt.load(args.device, stories_gpt.CHECKPOINT)
+    model = gpt.load(args.device, args.base)
     names = ["Lily", "Tim", "Sue", "Max", "Mia", "Ben", "Jack", "Daisy", "Priya", "Oscar", "Hana", "Leo", "Nina"]
     samples = 3
     torch.manual_seed(0)
@@ -161,7 +164,7 @@ if __name__ == "__main__":
           + gpt.generate(model, 120, prompt("Priya"), 0.8, tok.encode, tok.decode, stop=EOT_ID) + "\n")
 
     fine_tune(model, X, Y, args.device, STEPS=args.steps, val=val)
-    gpt.save(model, CHECKPOINT)
+    gpt.save(model, out)
 
     torch.manual_seed(0)
     after = name_test(model, tok, names, samples)
@@ -171,4 +174,4 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     print("\n   " + prompt("Priya").replace("\n", "\n   ")
           + gpt.generate(model, 250, prompt("Priya"), 0.8, tok.encode, tok.decode, stop=EOT_ID))
-    print(f"\nSaved to {CHECKPOINT}")
+    print(f"\nSaved to {out}")

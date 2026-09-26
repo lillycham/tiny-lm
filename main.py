@@ -117,12 +117,13 @@ def build_sft(rng, args):
     import sft
     import stories_gpt
 
-    if not sft.CHECKPOINT.exists():
-        sys.exit(f"No fine-tuned model at {sft.CHECKPOINT}. Run python sft.py first.")
+    path = args.checkpoint or sft.CHECKPOINT
+    if not path.exists():
+        sys.exit(f"No fine-tuned model at {path}. Run python sft.py first.")
     torch.manual_seed(args.seed)
     device = args.device or "mps"
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
-    model = gpt.load(device, sft.CHECKPOINT)
+    model = gpt.load(device, path)
     loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
     # start is a name. Show the whole conversation: the request, then the answer.
     return loss, lambda n, rng, start: sft.prompt(start) + gpt.generate(
@@ -134,8 +135,9 @@ def build_instruct(rng, args):
     import instruct_sft
     import stories_gpt
 
-    if not instruct_sft.CHECKPOINT.exists():
-        sys.exit(f"No fine-tuned model at {instruct_sft.CHECKPOINT}. Run python instruct_sft.py first.")
+    path = args.checkpoint or instruct_sft.CHECKPOINT
+    if not path.exists():
+        sys.exit(f"No fine-tuned model at {path}. Run python instruct_sft.py first.")
     features = [f.strip() for f in args.features.split(",") if f.strip()]
     unknown = [f for f in features if f not in instruct_sft.FEATURES]
     if unknown:
@@ -143,7 +145,7 @@ def build_instruct(rng, args):
     torch.manual_seed(args.seed)
     device = args.device or "mps"
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
-    model = gpt.load(device, instruct_sft.CHECKPOINT)
+    model = gpt.load(device, path)
     loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
 
     def sample(n, rng, start):
@@ -204,8 +206,8 @@ def main():
                         help="instruct: features the story should have, separated by commas, from Dialogue, Twist, "
                              "MoralValue, BadEnding, Foreshadowing and Conflict (default none)")
     parser.add_argument("--checkpoint", type=Path,
-                        help="stories: the model to load (default checkpoints/stories_gpt.pt;"
-                             " the 12M model is checkpoints/stories_gpt_384w6l.pt)")
+                        help="stories, sft and instruct: the model to load (default checkpoints/stories_gpt.pt,"
+                             " stories_sft.pt or stories_instruct.pt; the 12M models end in _384w6l.pt)")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="gpt, bpe, stories, sft and instruct: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
     args = parser.parse_args()

@@ -128,8 +128,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
     parser.add_argument("--steps", type=int, default=600, help="fine-tuning steps (default 600)")
+    parser.add_argument("--base", type=Path, default=stories_gpt.CHECKPOINT,
+                        help=f"the model to fine-tune (default {stories_gpt.CHECKPOINT})")
     parser.add_argument("--tests", type=int, default=40, help="held-out requests to test (default 40)")
     args = parser.parse_args()
+    out = stories_gpt.fine_tuned_path(CHECKPOINT, args.base)
     tok = WordBPE.load(TOKENISER)
 
     print(f"1. {request(['help', 'mud', 'bossy'], ['Dialogue', 'Twist'])}")
@@ -148,13 +151,13 @@ if __name__ == "__main__":
           f" ({time.time() - t:.0f}s)")
     print("   " + tests[0][2].replace("\n", "\n   "))
 
-    model = gpt.load(args.device, stories_gpt.CHECKPOINT)
+    model = gpt.load(args.device, args.base)
     torch.manual_seed(0)
     print(f"\n3. Before SFT: val answer loss {sft.answer_loss(model, *val, args.device):.4f}")
     show_test("   Test", follow_test(model, tok, tests))
 
     sft.fine_tune(model, X, Y, args.device, STEPS=args.steps, val=val)
-    gpt.save(model, CHECKPOINT)
+    gpt.save(model, out)
 
     torch.manual_seed(0)
     print(f"\n4. After SFT: val answer loss {sft.answer_loss(model, *val, args.device):.4f}")
@@ -163,4 +166,4 @@ if __name__ == "__main__":
     p = prompt(request(["dragon", "soup", "happy"], ["Dialogue"]))
     print("\n   " + p.replace("\n", "\n   ")
           + gpt.generate(model, 300, p, 0.8, tok.encode, tok.decode, stop=EOT_ID))
-    print(f"\nSaved to {CHECKPOINT}")
+    print(f"\nSaved to {out}")

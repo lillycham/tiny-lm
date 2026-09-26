@@ -30,6 +30,13 @@ CONFIG = dict(block=256, emb=192, heads=6, layers=6, dropout=0.0, vocab=VOCAB_SI
 CHECKPOINT = Path("checkpoints/stories_gpt.pt")
 B = 32
 
+def fine_tuned_path(path, base):
+    """Where to save a model fine-tuned from base: path itself for the default base model,
+    or with base's sizes added, e.g. stories_sft.pt -> stories_sft_384w6l.pt."""
+    if base == CHECKPOINT:
+        return path
+    return path.with_name(f"{path.stem}_{base.stem.removeprefix(CHECKPOINT.stem + '_')}.pt")
+
 def load_tokens(split):
     """The token IDs that word_bpe.py saved for split ("train" or "val")."""
     # TODO(Lilly): np.load the file str(TOKENS).format(split=split), with mmap_mode="r".
