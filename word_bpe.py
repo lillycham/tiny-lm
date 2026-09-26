@@ -72,7 +72,12 @@ def weighted_pair_counts(words):
     #   Start with counts = Counter(). For each word's ids and count n in words.items(),
     #   add n to counts[pair] for every neighbour pair in ids (zip(ids, ids[1:]) again).
     #   A Counter starts every missing key at 0, so counts[pair] += n just works.
-    raise NotImplementedError
+    counts = Counter()
+
+    for ids, n in words.items():
+        for pair in zip(ids, ids[1:]):
+            counts[pair] += n
+    return counts
 
 class WordBPE(BPE):
     def __init__(self, merges):
@@ -98,17 +103,16 @@ class WordBPE(BPE):
                 # Most words don't have the pair, so skip them quickly.
                 if pair[0] not in ids or pair not in zip(ids, ids[1:]):
                     continue
-                # TODO(Lilly): this word has the pair. Merge it, and keep counts up to date
-                #   without counting every word again:
-                #     1. new_ids = the word merged: merge() takes and returns a list, and a
-                #        dict key must be a tuple, so tuple(merge(list(ids), pair, new_id)).
-                #     2. Take this word's old pairs out of counts: subtract n from counts[p]
-                #        for every pair p in ids.
-                #     3. Put its new pairs in: add n to counts[p] for every pair p in new_ids.
-                #     4. Remember the change for later: changed[ids] = new_ids.
-                #   (You can't change words while the loop walks through it, so the loop
-                #   after this one does that.)
-                raise NotImplementedError
+
+                new_ids = tuple(merge(list(ids), pair, new_id))
+
+                for p in zip(ids, ids[1:]):
+                    counts[p] -= n
+
+                for p in zip(new_ids, new_ids[1:]):
+                    counts[p] += n
+
+                changed[ids] = new_ids
             for ids, new_ids in changed.items():
                 words[new_ids] = words.get(new_ids, 0) + words.pop(ids)
             del counts[pair]
@@ -121,16 +125,17 @@ class WordBPE(BPE):
 
     def encode_word(self, word):
         """One word's token IDs. Each word is encoded only once, then remembered."""
-        # TODO(Lilly): if word isn't in self.cache yet, encode it with bpe.py's encode,
-        #   super().encode(word), and store the result in self.cache[word].
-        #   Then return self.cache[word].
-        raise NotImplementedError
+        if word not in self.cache:
+            self.cache[word] = super().encode(word)
+        return self.cache[word]
 
     def encode(self, s):
         """Text -> token IDs: split into words, then encode each word."""
-        # TODO(Lilly): make a list, ids. For each word in split_words(s), add the word's
-        #   IDs to the end of the list: ids.extend(...) adds all the items of a list.
-        raise NotImplementedError
+        ids = []
+        for word in split_words(s):
+            ids.extend(self.encode_word(word))
+
+        return ids
 
     def encode_stories(self, texts):
         """Every story's tokens, then <|endoftext|>, all in one 16-bit array."""
