@@ -16,6 +16,7 @@ import math
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -86,11 +87,17 @@ class CausalSelfAttention(nn.Module):
         return self.drop(self.proj(self.join_heads(out)))
 
 class FeedForward(nn.Module):
-    """As in transformer.py, with dropout at the end."""
+    """As in transformer.py, with dropout at the end, and GELU in place of ReLU if gelu."""
 
-    def __init__(self, C, dropout):
+    def __init__(self, C, dropout, gelu=False):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(C, 4 * C), nn.ReLU(), nn.Linear(4 * C, C), nn.Dropout(dropout))
+        # TODO(Lilly): act = GELU if gelu, or ReLU if not. Change the line below into
+        #   a if condition else b.
+        #   GELU is a smooth ReLU: x times the chance that a normal random number is below x.
+        #   Big x -> x, very negative x -> 0, like ReLU, but with no sharp corner at 0. GPT-2
+        #   uses a quick formula for it with tanh, so use nn.GELU(approximate="tanh").
+        act = nn.ReLU()
+        self.net = nn.Sequential(nn.Linear(C, 4 * C), act, nn.Linear(4 * C, C), nn.Dropout(dropout))
 
     def forward(self, x):
         return self.net(x)
@@ -98,12 +105,12 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """As in transformer.py, with the faster attention."""
 
-    def __init__(self, C, n_head, dropout):
+    def __init__(self, C, n_head, dropout, gelu=False):
         super().__init__()
         self.ln1 = nn.LayerNorm(C)
         self.attn = CausalSelfAttention(C, n_head, dropout)
         self.ln2 = nn.LayerNorm(C)
-        self.ffwd = FeedForward(C, dropout)
+        self.ffwd = FeedForward(C, dropout, gelu)
 
     def forward(self, x):
         x = x + self.attn(self.ln1(x))
@@ -111,18 +118,39 @@ class Block(nn.Module):
         return x
 
 class GPT(nn.Module):
-    """Embeddings -> blocks -> LayerNorm -> logits."""
+    """Embeddings -> blocks -> LayerNorm -> logits.
 
-    def __init__(self, block, emb, heads, layers, dropout, vocab=V):
+    gelu and tied make the model like GPT-2, so it can become a Hugging Face GPT-2 model:
+      - gelu: GELU in place of ReLU in every feed-forward layer.
+      - tied: the output layer uses the token embedding matrix, and has no bias.
+    """
+
+    def __init__(self, block, emb, heads, layers, dropout, vocab=V, gelu=False, tied=False):
         super().__init__()
-        self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout, vocab=vocab)
+        self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout, vocab=vocab,
+                           gelu=gelu, tied=tied)
         self.block = block
         self.tok = nn.Embedding(vocab, emb)
         self.pos = nn.Embedding(block, emb)
         self.drop = nn.Dropout(dropout)
-        self.blocks = nn.Sequential(*[Block(emb, heads, dropout) for _ in range(layers)])
+        self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu) for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
-        self.out = nn.Linear(emb, vocab)
+        if tied:
+            # TODO(Lilly): tied embeddings, in three lines.
+            #   The token embedding turns an ID into a vector: row i of self.tok.weight,
+            #   (vocab, emb). The output layer does the opposite: it scores every token
+            #   against the final vector. Tying uses the same matrix for both, so a token
+            #   has one vector, and 4,096 x 192 = 786k parameters are saved.
+            #     1. self.out = an nn.Linear from emb to vocab, with bias=False.
+            #        (Its weight is stored as (out, in) = (vocab, emb): the same shape as
+            #        the embedding's weight.)
+            #     2. Start the embedding small: nn.init.normal_(self.tok.weight, std=0.02).
+            #        nn.Embedding starts with std 1, and as output weights that gives logits
+            #        about 14 big: the starting loss would be far above ln(vocab).
+            #     3. self.out.weight = self.tok.weight: the same Parameter, not a copy.
+            raise NotImplementedError
+        else:
+            self.out = nn.Linear(emb, vocab)
 
     def forward(self, X):
         """X (B, T) IDs -> logits (B, T, V)."""
@@ -134,6 +162,12 @@ def batch(ids, B, block, device):
     """B random chunks of `block` characters, and the same chunks shifted by one."""
     starts = torch.randint(0, len(ids) - block, (B, 1))
     idx = starts + torch.arange(block)     # (B, block): the positions of every chunk
+    if isinstance(ids, np.ndarray):
+        # NumPy tokens, maybe read from disk only as needed: take the chunks, then make
+        # them tensors. uint16 -> int64, because nn.Embedding needs int64 IDs.
+        idx = idx.numpy()
+        return (torch.from_numpy(ids[idx].astype(np.int64)).to(device),
+                torch.from_numpy(ids[idx + 1].astype(np.int64)).to(device))
     return ids[idx].to(device), ids[idx + 1].to(device)
 
 def lm_loss(model, X, Y):
@@ -186,10 +220,11 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
 
 # ---------- generate text ----------
 @torch.no_grad()
-def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode):
+def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode, stop=None):
     """Sample n tokens after `start`. Temperature below 1 makes safer choices.
 
     The tokens are characters, unless you give another tokeniser's encode and decode.
+    If the model samples the token ID stop, end there, without it.
     """
     model.eval()
     device = next(model.parameters()).device
@@ -198,6 +233,8 @@ def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode
     for _ in range(n):
         logits = model(ids[:, -model.block:])[0, -1] / temperature
         char_next = torch.multinomial(F.softmax(logits, dim=-1), 1)
+        if char_next.item() == stop:
+            break
         ids = torch.cat([ids, char_next[None]], dim=1)
         out.append(char_next.item())
     return decode(out)

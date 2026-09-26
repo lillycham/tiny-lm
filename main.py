@@ -7,6 +7,7 @@
     python main.py attention --start "ROMEO:"
     python main.py gpt --temperature 0.8     # after python gpt.py has saved a checkpoint
     python main.py bpe -n 250                # after python bpe_gpt.py has saved a checkpoint
+    python main.py stories --temperature 0.8 # after python stories_gpt.py has saved a checkpoint
     python main.py tokens --start "Once upon a time, Tom's cat sat."
                                              # how the two BPE tokenisers split the text
 """
@@ -90,8 +91,22 @@ def build_bpe(rng, args):
     loss = gpt.val_loss(model, torch.tensor(tok.encode(bpe_gpt.text[bpe_gpt.split:])), device)
     return loss, lambda n, rng, start: gpt.generate(model, n, start, args.temperature, tok.encode, tok.decode)
 
+def build_stories(rng, args):
+    import torch
+    import gpt
+    import stories_gpt
+
+    if not stories_gpt.CHECKPOINT.exists():
+        sys.exit(f"No trained model at {stories_gpt.CHECKPOINT}. Run python stories_gpt.py first.")
+    torch.manual_seed(args.seed)
+    device = args.device or "mps"
+    tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
+    model = gpt.load(device, stories_gpt.CHECKPOINT)
+    loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
+    return loss, lambda n, rng, start: stories_gpt.story(model, tok, start, args.temperature, n)[len(start):]
+
 MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": build_torch,
-          "attention": build_attention, "gpt": build_gpt, "bpe": build_bpe}
+          "attention": build_attention, "gpt": build_gpt, "bpe": build_bpe, "stories": build_stories}
 
 def show_tokens(text):
     """Print how each saved BPE tokeniser splits text, with | between the tokens."""
@@ -117,25 +132,31 @@ def main():
                              "gpt: a small transformer, loaded from the checkpoint gpt.py saves; "
                              "bpe: the same transformer on BPE tokens, from the checkpoint bpe_gpt.py saves "
                              "(its val loss is per token, not per character); "
+                             "stories: a GPT-2 shaped transformer on TinyStories, from the checkpoint "
+                             "stories_gpt.py saves (per token; it stops when a story ends); "
                              "tokens: no model, only show how the BPE tokenisers split --start")
     parser.add_argument("-n", type=int, default=500,
-                        help="number of characters to generate, or tokens for bpe (default 500)")
+                        help="number of characters to generate, or tokens for bpe and stories (default 500)")
     parser.add_argument("--seed", type=int, default=0, help="random seed for training and sampling (default 0)")
-    parser.add_argument("--start", default="\n",
-                        help="text to continue from (default newline); the bigrams use its last character")
+    parser.add_argument("--start",
+                        help="text to continue from (default newline, or 'Once upon a time' for stories);"
+                             " the bigrams use its last character")
     parser.add_argument("--smoothing", type=float, default=1, help="counts: pseudo-count added to every pair (default 1)")
     parser.add_argument("--steps", type=int, help="training steps (default 5000 for sgd and attention, 60000 for mlp and torch)")
     parser.add_argument("--device", choices=["cpu", "mps"],
                         help="torch: device to train on (default cpu, faster for this model); "
-                             "gpt and bpe: device to run on (default mps)")
+                             "gpt, bpe and stories: device to run on (default mps)")
     parser.add_argument("--temperature", type=float, default=1.0,
-                        help="gpt and bpe: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
+                        help="gpt, bpe and stories: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
     args = parser.parse_args()
+    if args.start is None:
+        args.start = "Once upon a time" if args.model == "stories" else "\n"
     if args.model == "tokens":
         # Any text works here, because both tokenisers start from bytes.
         show_tokens(args.start)
         return
-    unknown = sorted(set(args.start) - set(stoi))
+    # The stories model reads bytes, so any text works. The others know only Shakespeare's characters.
+    unknown = [] if args.model == "stories" else sorted(set(args.start) - set(stoi))
     if not args.start or unknown:
         parser.error(f"--start must be non-empty text made of characters from the training text; unknown: {unknown}")
 
