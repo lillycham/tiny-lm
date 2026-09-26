@@ -13,7 +13,10 @@ What changes from transformer.py:
 """
 import argparse
 import math
+import subprocess
+import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -203,8 +206,25 @@ def param_groups(model, weight_decay):
     return [{"params": decay, "weight_decay": weight_decay}, 
             {"params": no_decay, "weight_decay": 0.0}]
 
+def run_info():
+    """What made a checkpoint: the code version, the command and the date.
+
+    dirty is True if tracked files had changes that weren't committed. Then diff holds
+    those changes, so the exact code can still be rebuilt from the commit.
+    """
+    def git(*args):
+        r = subprocess.run(["git", *args], capture_output=True, text=True, cwd=Path(__file__).parent)
+        return r.stdout.strip() if r.returncode == 0 else None
+    status = git("status", "--porcelain", "--untracked-files=no")
+    return {"commit": git("rev-parse", "HEAD"), "dirty": bool(status), "diff": git("diff", "HEAD") if status else "",
+            "argv": sys.argv, "date": datetime.now().isoformat(timespec="seconds")}
+
+def is_snapshot_step(n):
+    """Steps 64, 128, 256, ...: close together early, when heads form, and far apart later."""
+    return n >= 64 and n & (n - 1) == 0
+
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
-                train_ids=None, val_ids=None, resume=None, resume_minutes=30):
+                train_ids=None, val_ids=None, resume=None, resume_minutes=30, snapshots=None):
     """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
 
     Trains on the character IDs from data.py, or on train_ids and val_ids if given.
@@ -213,6 +233,9 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     and if the file already exists, carry on from it. Everything is the weights, the
     optimizer's state (Adam's m and v for every weight), the step, and the random
     number generator, so the batches after a restart are the ones there would have been.
+
+    With snapshots, a path like checkpoints/snapshots/stories_gpt: also save the model
+    at steps 64, 128, 256, ... as stories_gpt_step64.pt and so on, to see how it changes.
     """
     if train_ids is None:
         train_ids, val_ids = torch.tensor(train), torch.tensor(val)
@@ -232,7 +255,8 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         """Write to a temporary file, then rename: a crash while saving can't break the old file."""
         tmp = resume.with_suffix(".tmp")
         torch.save({"weights": model.state_dict(), "optimizer": opt.state_dict(), "step": step,
-                    "rng": torch.random.get_rng_state(), "STEPS": STEPS, "LR": LR, "config": model.config}, tmp)
+                    "rng": torch.random.get_rng_state(), "STEPS": STEPS, "LR": LR, "config": model.config,
+                    "info": run_info()}, tmp)
         tmp.replace(resume)
 
     def lr_at(step):
@@ -256,6 +280,8 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         if log_every and (step + 1) % log_every == 0:
             print(f"step {step + 1:5d}  train loss {loss.item():.4f}"
                   f"  val loss {val_loss(model, val_ids, device):.4f}  ({time.time() - start:.0f}s)", flush=True)
+        if snapshots and is_snapshot_step(step + 1):
+            save(model, snapshots.with_name(f"{snapshots.name}_step{step + 1}.pt"))
         if resume and time.time() - last_save > resume_minutes * 60:
             save_resume(step + 1)
             last_save = time.time()
@@ -282,9 +308,13 @@ def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode
     return decode(out)
 
 def save(model, path=CHECKPOINT):
-    """Save the weights and the sizes, so load() can rebuild the same model."""
-    path.parent.mkdir(exist_ok=True)
-    torch.save({"config": model.config, "weights": model.state_dict()}, path)
+    """Save the weights and the sizes, so load() can rebuild the same model, and run_info()."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"config": model.config, "weights": model.state_dict(), "info": run_info()}, path)
+
+def load_info(path):
+    """The run_info() saved with a checkpoint, or None for checkpoints from before it."""
+    return torch.load(path, map_location="cpu").get("info")
 
 def load(device="cpu", path=CHECKPOINT):
     saved = torch.load(path, map_location=device)

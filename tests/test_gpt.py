@@ -151,3 +151,22 @@ def test_fine_tuned_path():
 def test_checkpoint_loads(path):
     """New options once gave every model a parameter that old checkpoints don't have."""
     gpt.load("cpu", path)
+
+# ---------- run info and snapshots ----------
+def test_run_info_saved(tmp_path):
+    path = tmp_path / "model.pt"
+    gpt.save(tiny(), path)
+    info = gpt.load_info(path)
+    assert len(info["commit"]) == 40 and isinstance(info["dirty"], bool) and info["argv"]
+    assert info["dirty"] == bool(info["diff"])
+
+def test_snapshot_steps():
+    assert [n for n in range(1, 1100) if gpt.is_snapshot_step(n)] == [64, 128, 256, 512, 1024]
+
+def test_training_saves_snapshots(tmp_path):
+    model = tiny()
+    ids = torch.randint(0, TINY["vocab"], (500,))
+    gpt.train_model(model, "cpu", STEPS=130, B=2, WARMUP=10, log_every=0,
+                    train_ids=ids, val_ids=ids, snapshots=tmp_path / "snaps" / "tiny")
+    assert sorted(p.name for p in (tmp_path / "snaps").iterdir()) == ["tiny_step128.pt", "tiny_step64.pt"]
+    gpt.load("cpu", tmp_path / "snaps" / "tiny_step64.pt")
