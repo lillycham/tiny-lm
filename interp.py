@@ -72,7 +72,7 @@ class Recorder:
             x = inputs[0]
             q, k, v = module.qkv(x).split(x.shape[-1], dim=-1)
             q = module.split_heads(q)
-            k = module.split_heads(k)
+            k = module.smear_keys(module.split_heads(k))
             v = module.split_heads(v)
 
             _, weights = attention(q, k, v)

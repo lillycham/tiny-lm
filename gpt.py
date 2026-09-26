@@ -58,7 +58,7 @@ class CausalSelfAttention(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.smear = smear
         if smear:
-            self.a = nn.Parameter(torch.full((n_head,), 3.0))
+            self.a = nn.Parameter(torch.full((n_head,), 0.0))
 
     def split_heads(self, t):
         """(B, T, C) -> (B, n_head, T, hs), where hs = C // n_head."""
@@ -71,7 +71,7 @@ class CausalSelfAttention(nn.Module):
         B, n_head, T, hs = t.shape
 
         return t.transpose(1,2).reshape(B, T, n_head * hs)
-
+        
     def forward(self, x):
         """x (B, T, C) -> (B, T, C)."""
         C = x.shape[-1]
@@ -79,6 +79,13 @@ class CausalSelfAttention(nn.Module):
         q, k, v = self.qkv(x).split(C, dim=-1)
         q, k, v = self.split_heads(q), self.split_heads(k), self.split_heads(v)
 
+        k = self.smear_keys(k)
+
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        
+        return self.drop(self.proj(self.join_heads(out)))
+
+    def smear_keys(self, k):
         # here: k is (B, n_head, T, hs), so smear it along T (dim=2)
         if self.smear:
             zeros = torch.zeros_like(k[:, :, :1])
@@ -87,10 +94,7 @@ class CausalSelfAttention(nn.Module):
             # k'ₜ = σ(a)·kₜ + (1 − σ(a))·kₜ₋₁        one learned number a per head
             s = torch.sigmoid(self.a).view(-1, 1, 1)
             k = s * k  + (1 - s) * k_prev
-
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        
-        return self.drop(self.proj(self.join_heads(out)))
+        return k
 
 class FeedForward(nn.Module):
     """As in transformer.py, with dropout at the end, and GELU in place of ReLU if gelu."""
