@@ -9,6 +9,10 @@ once. So there's no overfitting, and no need for dropout.
 
     python word_bpe.py            # first, to make the tokens
     python stories_gpt.py         # about 30 minutes on the GPU
+
+A bigger model overnight, which can carry on after a crash or a restart:
+
+    caffeinate -i python stories_gpt.py --emb 384 --steps 32000
     python main.py stories        # then write stories with the saved model
 """
 import argparse
@@ -41,27 +45,38 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
     parser.add_argument("--steps", type=int, default=7500, help="training steps (default 7500)")
+    parser.add_argument("--lr", type=float, default=1e-3, help="peak learning rate (default 1e-3)")
+    for name in ("emb", "heads", "layers"):
+        parser.add_argument(f"--{name}", type=int, default=CONFIG[name], help=f"default {CONFIG[name]}")
     args = parser.parse_args()
+    config = dict(CONFIG, emb=args.emb, heads=args.heads, layers=args.layers)
+    # The default model keeps its old checkpoint name, so main.py finds it. Others get their sizes in the name.
+    sizes = (config["emb"], config["heads"], config["layers"])
+    out = CHECKPOINT if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) else \
+        CHECKPOINT.with_name(f"stories_gpt_{sizes[0]}w{sizes[2]}l.pt")
+    resume = out.with_suffix(".resume.pt")
 
     train_ids, val_ids = load_tokens("train"), load_tokens("val")
     tok = WordBPE.load(TOKENISER)
     print(f"{len(train_ids):,} training tokens, {len(val_ids):,} validation tokens")
 
     torch.manual_seed(0)
-    model = gpt.GPT(**CONFIG).to(args.device)
+    model = gpt.GPT(**config).to(args.device)
     n_params = sum(p.numel() for p in model.parameters())
-    n_tokens = args.steps * B * CONFIG["block"]
+    n_tokens = args.steps * B * config["block"]
     print(f"\n1. {n_params:,} parameters. The embeddings are shared, so they count once:"
-          f" {CONFIG['vocab']} x {CONFIG['emb']} = {CONFIG['vocab'] * CONFIG['emb']:,}")
+          f" {config['vocab']} x {config['emb']} = {config['vocab'] * config['emb']:,}")
     print(f"   Training sees {n_tokens / 1e6:.0f}M tokens, {n_tokens / n_params:.0f} per parameter")
     start_loss = gpt.val_loss(model, val_ids, args.device)
     print(f"\n2. Starting val loss {start_loss:.4f}, expected about ln({VOCAB_SIZE}) = {math.log(VOCAB_SIZE):.4f}\n",
           flush=True)
 
     t = time.time()
-    gpt.train_model(model, args.device, STEPS=args.steps, B=B, train_ids=train_ids, val_ids=val_ids)
-    gpt.save(model, CHECKPOINT)
-    print(f"\nTrained in {(time.time() - t) / 60:.0f} minutes. Saved to {CHECKPOINT}\n")
+    gpt.train_model(model, args.device, STEPS=args.steps, B=B, LR=args.lr, log_every=1000,
+                    train_ids=train_ids, val_ids=val_ids, resume=resume)
+    gpt.save(model, out)
+    resume.unlink(missing_ok=True)     # finished: a new run with the same sizes starts from scratch
+    print(f"\nTrained in {(time.time() - t) / 60:.0f} minutes. Saved to {out}\n")
     torch.manual_seed(0)
     for _ in range(2):
         print(story(model, tok) + "\n")

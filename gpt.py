@@ -186,14 +186,36 @@ def param_groups(model, weight_decay):
             {"params": no_decay, "weight_decay": 0.0}]
 
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
-                train_ids=None, val_ids=None):
+                train_ids=None, val_ids=None, resume=None, resume_minutes=30):
     """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
 
     Trains on the character IDs from data.py, or on train_ids and val_ids if given.
+
+    With resume, a path: save everything needed to carry on there every resume_minutes,
+    and if the file already exists, carry on from it. Everything is the weights, the
+    optimizer's state (Adam's m and v for every weight), the step, and the random
+    number generator, so the batches after a restart are the ones there would have been.
     """
     if train_ids is None:
         train_ids, val_ids = torch.tensor(train), torch.tensor(val)
     opt = torch.optim.AdamW(param_groups(model, 0.1), lr=LR)
+    first = 0
+    if resume and resume.exists():
+        saved = torch.load(resume, map_location=device, weights_only=False)
+        if (saved["STEPS"], saved["LR"], saved["config"]) != (STEPS, LR, model.config):
+            raise ValueError(f"{resume} is from a run with other settings. Delete it to start again.")
+        model.load_state_dict(saved["weights"])
+        opt.load_state_dict(saved["optimizer"])
+        torch.random.set_rng_state(saved["rng"])
+        first = saved["step"]
+        print(f"Carrying on from step {first} of {STEPS}, saved in {resume}", flush=True)
+
+    def save_resume(step):
+        """Write to a temporary file, then rename: a crash while saving can't break the old file."""
+        tmp = resume.with_suffix(".tmp")
+        torch.save({"weights": model.state_dict(), "optimizer": opt.state_dict(), "step": step,
+                    "rng": torch.random.get_rng_state(), "STEPS": STEPS, "LR": LR, "config": model.config}, tmp)
+        tmp.replace(resume)
 
     def lr_at(step):
         """Warm up for WARMUP steps, then follow a cosine curve down to LR / 10."""
@@ -203,8 +225,8 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         return LR / 10 + (LR - LR / 10) * 0.5 * (1 + math.cos(math.pi * progress))
 
     model.train()
-    start = time.time()
-    for step in range(STEPS):
+    start = last_save = time.time()
+    for step in range(first, STEPS):
         for group in opt.param_groups:
             group["lr"] = lr_at(step)
         loss = lm_loss(model, *batch(train_ids, B, model.block, device))
@@ -216,6 +238,9 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         if log_every and (step + 1) % log_every == 0:
             print(f"step {step + 1:5d}  train loss {loss.item():.4f}"
                   f"  val loss {val_loss(model, val_ids, device):.4f}  ({time.time() - start:.0f}s)", flush=True)
+        if resume and time.time() - last_save > resume_minutes * 60:
+            save_resume(step + 1)
+            last_save = time.time()
 
 # ---------- generate text ----------
 @torch.no_grad()
