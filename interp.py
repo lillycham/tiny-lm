@@ -63,21 +63,22 @@ class Recorder:
         # A forward hook is called as hook(module, inputs, output) after the module's
         # forward. inputs is a tuple of the arguments to forward.
         def hook(module, inputs, output):
-            # TODO(Lilly): one line. Save output as self.resid[i], with .detach(): that
-            #   keeps the numbers but drops the autograd history, which we don't need.
-            raise NotImplementedError
+            self.resid[i] = output.detach()
         return hook
 
     def save_attn(self, i):
         """A hook on a CausalSelfAttention that saves its attention weights as attn[i]."""
         def hook(module, inputs, output):
-            # TODO(Lilly): F.scaled_dot_product_attention doesn't give back the weights, so
-            #   work them out again, like the first lines of CausalSelfAttention.forward:
-            #     1. x = inputs[0]: what the attention layer got (after ln1).
-            #     2. q, k and v from module.qkv(x), split into heads with module.split_heads.
-            #     3. Your attention() from attention.py returns (out, weights). Save the
-            #        weights as self.attn[i], with .detach().
-            raise NotImplementedError
+            x = inputs[0]
+            q, k, v = module.qkv(x).split(x.shape[-1], dim=-1)
+            q = module.split_heads(q)
+            k = module.split_heads(k)
+            v = module.split_heads(v)
+
+            _, weights = attention(q, k, v)
+
+            self.attn[i] = weights.detach()
+
         return hook
 
 # ---------- scoring ----------
@@ -151,11 +152,7 @@ def induction(model, pool, L=50, B=20, seed=0):
     scores = torch.zeros(n_layer, n_head)
     for i in range(n_layer):
         for t in range(L + 1, 2 * L):
-            # TODO(Lilly): add to scores[i] how much each head of block i looks from t to
-            #   t - L + 1. rec.attn[i] is (B, n_head, T, T): [batch, head, from, to]. Take
-            #   every batch and head with :, then .mean(dim=0) over the batch, to get one
-            #   number per head, (n_head,).
-            raise NotImplementedError
+            scores[i] += rec.attn[i][:,:,t,t - L + 1].mean(dim=0)
     return first, repeat, scores / (L - 1)
 
 def show_head(model, tok, text, layer, head):
