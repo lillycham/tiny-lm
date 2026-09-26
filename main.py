@@ -9,6 +9,8 @@
     python main.py bpe -n 250                # after python bpe_gpt.py has saved a checkpoint
     python main.py stories --temperature 0.8 # after python stories_gpt.py has saved a checkpoint
     python main.py sft --start Priya         # a story about a name, after python sft.py
+    python main.py instruct --start "dragon, soup, happy" --features Dialogue,Twist
+                                             # a story with those words, after python instruct_sft.py
     python main.py tokens --start "Once upon a time, Tom's cat sat."
                                              # how the two BPE tokenisers split the text
 """
@@ -123,9 +125,34 @@ def build_sft(rng, args):
     return loss, lambda n, rng, start: sft.prompt(start) + gpt.generate(
         model, n, sft.prompt(start), args.temperature, tok.encode, tok.decode, stop=stories_gpt.EOT_ID)
 
+def build_instruct(rng, args):
+    import torch
+    import gpt
+    import instruct_sft
+    import stories_gpt
+
+    if not instruct_sft.CHECKPOINT.exists():
+        sys.exit(f"No fine-tuned model at {instruct_sft.CHECKPOINT}. Run python instruct_sft.py first.")
+    features = [f.strip() for f in args.features.split(",") if f.strip()]
+    unknown = [f for f in features if f not in instruct_sft.FEATURES]
+    if unknown:
+        sys.exit(f"Unknown features {unknown}. Choose from {', '.join(instruct_sft.FEATURES)}.")
+    torch.manual_seed(args.seed)
+    device = args.device or "mps"
+    tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
+    model = gpt.load(device, instruct_sft.CHECKPOINT)
+    loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
+
+    def sample(n, rng, start):
+        # start is the words, separated by commas. Show the request, then the answer.
+        words = [w.strip() for w in start.split(",") if w.strip()]
+        p = instruct_sft.prompt(instruct_sft.request(words, features))
+        return p + gpt.generate(model, n, p, args.temperature, tok.encode, tok.decode, stop=stories_gpt.EOT_ID)
+    return loss, sample
+
 MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": build_torch,
           "attention": build_attention, "gpt": build_gpt, "bpe": build_bpe, "stories": build_stories,
-          "sft": build_sft}
+          "sft": build_sft, "instruct": build_instruct}
 
 def show_tokens(text):
     """Print how each saved BPE tokeniser splits text, with | between the tokens."""
@@ -155,37 +182,43 @@ def main():
                              "stories_gpt.py saves (per token; it stops when a story ends); "
                              "sft: the stories model after sft.py, asked for a story about the name in --start "
                              "(its val loss is on plain stories); "
+                             "instruct: the stories model after instruct_sft.py, asked for a story with the words "
+                             "in --start, separated by commas, and the --features (val loss on plain stories); "
                              "tokens: no model, only show how the BPE tokenisers split --start")
     parser.add_argument("-n", type=int, default=500,
                         help="number of characters to generate, or tokens for bpe and stories (default 500)")
     parser.add_argument("--seed", type=int, default=0, help="random seed for training and sampling (default 0)")
     parser.add_argument("--start",
                         help="text to continue from (default newline, or 'Once upon a time' for stories);"
-                             " the bigrams use its last character; for sft, a name (default Lily)")
+                             " the bigrams use its last character; for sft, a name (default Lily);"
+                             " for instruct, words separated by commas (default 'dragon, soup, happy')")
     parser.add_argument("--smoothing", type=float, default=1, help="counts: pseudo-count added to every pair (default 1)")
     parser.add_argument("--steps", type=int, help="training steps (default 5000 for sgd and attention, 60000 for mlp and torch)")
     parser.add_argument("--device", choices=["cpu", "mps"],
                         help="torch: device to train on (default cpu, faster for this model); "
-                             "gpt, bpe, stories and sft: device to run on (default mps)")
+                             "gpt, bpe, stories, sft and instruct: device to run on (default mps)")
+    parser.add_argument("--features", default="",
+                        help="instruct: features the story should have, separated by commas, from Dialogue, Twist, "
+                             "MoralValue, BadEnding, Foreshadowing and Conflict (default none)")
     parser.add_argument("--temperature", type=float, default=1.0,
-                        help="gpt, bpe, stories and sft: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
+                        help="gpt, bpe, stories, sft and instruct: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
     args = parser.parse_args()
     if args.start is None:
-        args.start = {"stories": "Once upon a time", "sft": "Lily"}.get(args.model, "\n")
+        args.start = {"stories": "Once upon a time", "sft": "Lily", "instruct": "dragon, soup, happy"}.get(args.model, "\n")
     if args.model == "tokens":
         # Any text works here, because both tokenisers start from bytes.
         show_tokens(args.start)
         return
     # The stories models read bytes, so any text works. The others know only Shakespeare's characters.
-    unknown = [] if args.model in ("stories", "sft") else sorted(set(args.start) - set(stoi))
+    unknown = [] if args.model in ("stories", "sft", "instruct") else sorted(set(args.start) - set(stoi))
     if not args.start or unknown:
         parser.error(f"--start must be non-empty text made of characters from the training text; unknown: {unknown}")
 
     rng = np.random.default_rng(args.seed)
     loss, sample = MODELS[args.model](rng, args)
     print(f"[{args.model}] val loss {loss:.4f}\n")
-    # sft prints the whole conversation itself, because its start is only a name.
-    print(("" if args.model == "sft" else args.start) + sample(args.n, rng, args.start))
+    # sft and instruct print the whole conversation themselves, because their start is only a name or words.
+    print(("" if args.model in ("sft", "instruct") else args.start) + sample(args.n, rng, args.start))
 
 if __name__ == "__main__":
     main()
