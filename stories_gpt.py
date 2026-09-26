@@ -14,6 +14,12 @@ A bigger model overnight, which can carry on after a crash or a restart:
 
     caffeinate -i python stories_gpt.py --emb 384 --steps 32000
     python main.py stories        # then write stories with the saved model
+
+The smeared-key test: the default size with the current code, then with --smear.
+--tag gives the control run its own name, so it doesn't replace stories_gpt.pt.
+
+    python stories_gpt.py --tag control     # checkpoints/stories_gpt_192w6l_control.pt
+    python stories_gpt.py --smear           # checkpoints/stories_gpt_192w6l_smear.pt
 """
 import argparse
 import math
@@ -55,12 +61,18 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3, help="peak learning rate (default 1e-3)")
     for name in ("emb", "heads", "layers"):
         parser.add_argument(f"--{name}", type=int, default=CONFIG[name], help=f"default {CONFIG[name]}")
+    parser.add_argument("--smear", action="store_true", help="smeared keys (not GPT-2 compatible)")
+    parser.add_argument("--tag", help="a label for the checkpoint name, e.g. control")
     args = parser.parse_args()
-    config = dict(CONFIG, emb=args.emb, heads=args.heads, layers=args.layers)
-    # The default model keeps its old checkpoint name, so main.py finds it. Others get their sizes in the name.
+    config = dict(CONFIG, emb=args.emb, heads=args.heads, layers=args.layers, smear=args.smear)
+    # The default model keeps its old checkpoint name, so main.py finds it. Others get their sizes
+    # in the name, then _smear and the tag if given: stories_gpt_192w6l_smear.pt.
     sizes = (config["emb"], config["heads"], config["layers"])
-    out = CHECKPOINT if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) else \
-        CHECKPOINT.with_name(f"stories_gpt_{sizes[0]}w{sizes[2]}l.pt")
+    if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) and not args.smear and not args.tag:
+        out = CHECKPOINT
+    else:
+        name = f"stories_gpt_{sizes[0]}w{sizes[2]}l" + "_smear" * args.smear + (f"_{args.tag}" if args.tag else "")
+        out = CHECKPOINT.with_name(name + ".pt")
     resume = out.with_suffix(".resume.pt")
 
     train_ids, val_ids = load_tokens("train"), load_tokens("val")
