@@ -186,15 +186,8 @@ def check_recorder(model, tok):
     print(f"   Weights @ v rebuilds block 0's attention: {torch.allclose(rebuilt, attn(x), atol=1e-5)}")
     print(f"   Hooks removed afterwards: {all(len(m._forward_hooks) == 0 for m in model.modules())}")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT, help=f"default {CHECKPOINT}")
-    args = parser.parse_args()
-
-    torch.manual_seed(0)
-    model = gpt.load("cpu", args.checkpoint)
-    tok = WordBPE.load(TOKENISER)
-    print(f"{args.checkpoint}: {sum(p.numel() for p in model.parameters()):,} parameters\n")
+def run_interp(model, tok, path):
+    print(f"{path}: {sum(p.numel() for p in model.parameters()):,} parameters\n")
     check_recorder(model, tok)
 
     print("\n2. Name tokens:  " + "  ".join(tok.show(tok.encode(" " + n)) for n in KNOWN[:3] + UNSEEN[:5]))
@@ -214,3 +207,20 @@ if __name__ == "__main__":
     layer, head = divmod(scores.argmax().item(), scores.shape[1])
     print(f"\n   The strongest, layer {layer} head {head}, on a story:")
     print("   " + show_head(model, tok, "Tom had a red ball. Tom gave the red", layer, head))
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT, help=f"default {CHECKPOINT}")
+    parser.add_argument("--against", type=Path, default=None, help="default off")
+    args = parser.parse_args()
+
+    torch.manual_seed(0)
+    model = gpt.load("cpu", args.checkpoint)
+    tok = WordBPE.load(TOKENISER)
+
+    run_interp(model, tok, args.checkpoint)
+
+    if args.against:
+        model_against = gpt.load("cpu", args.against)
+        run_interp(model_against, tok, args.against)
+
