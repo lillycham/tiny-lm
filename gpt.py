@@ -72,17 +72,11 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         """x (B, T, C) -> (B, T, C)."""
         C = x.shape[-1]
-        # TODO(Lilly): four steps.
-        #   1. self.qkv(x) gives (B, T, 3 * C). .split(C, dim=-1) cuts it into three
-        #      (B, T, C) pieces, in the order q, k, v.
-        #   2. split_heads on each of q, k and v.
-        #   3. attention(q, k, v), which returns (out, weights).
-        #   4. join_heads on out, then self.proj, then self.drop.
         q, k, v = self.qkv(x).split(C, dim=-1)
 
         q, k, v = self.split_heads(q), self.split_heads(k), self.split_heads(v)
 
-        out, _ = attention(q, k, v)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         
         return self.drop(self.proj(self.join_heads(out)))
 
