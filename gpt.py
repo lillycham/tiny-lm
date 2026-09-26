@@ -91,12 +91,7 @@ class FeedForward(nn.Module):
 
     def __init__(self, C, dropout, gelu=False):
         super().__init__()
-        # TODO(Lilly): act = GELU if gelu, or ReLU if not. Change the line below into
-        #   a if condition else b.
-        #   GELU is a smooth ReLU: x times the chance that a normal random number is below x.
-        #   Big x -> x, very negative x -> 0, like ReLU, but with no sharp corner at 0. GPT-2
-        #   uses a quick formula for it with tanh, so use nn.GELU(approximate="tanh").
-        act = nn.ReLU()
+        act = nn.GELU(approximate="tanh") if gelu else nn.ReLU()
         self.net = nn.Sequential(nn.Linear(C, 4 * C), act, nn.Linear(4 * C, C), nn.Dropout(dropout))
 
     def forward(self, x):
@@ -136,19 +131,9 @@ class GPT(nn.Module):
         self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu) for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
         if tied:
-            # TODO(Lilly): tied embeddings, in three lines.
-            #   The token embedding turns an ID into a vector: row i of self.tok.weight,
-            #   (vocab, emb). The output layer does the opposite: it scores every token
-            #   against the final vector. Tying uses the same matrix for both, so a token
-            #   has one vector, and 4,096 x 192 = 786k parameters are saved.
-            #     1. self.out = an nn.Linear from emb to vocab, with bias=False.
-            #        (Its weight is stored as (out, in) = (vocab, emb): the same shape as
-            #        the embedding's weight.)
-            #     2. Start the embedding small: nn.init.normal_(self.tok.weight, std=0.02).
-            #        nn.Embedding starts with std 1, and as output weights that gives logits
-            #        about 14 big: the starting loss would be far above ln(vocab).
-            #     3. self.out.weight = self.tok.weight: the same Parameter, not a copy.
-            raise NotImplementedError
+            self.out = nn.Linear(emb, vocab, bias=False)
+            nn.init.normal_(self.tok.weight, std=0.02)
+            self.out.weight = self.tok.weight
         else:
             self.out = nn.Linear(emb, vocab)
 

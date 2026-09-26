@@ -31,7 +31,7 @@ def load_tokens(split):
     # TODO(Lilly): np.load the file str(TOKENS).format(split=split), with mmap_mode="r".
     #   That maps the file into memory without reading it: NumPy reads each part from
     #   disk only when you use it. So the 1.1 GB file costs almost no memory.
-    raise NotImplementedError
+    return np.load(str(TOKENS).format(split=split), mmap_mode="r")
 
 def story(model, tok, start="Once upon a time", temperature=1.0, n=400):
     """Write one story that starts with start, until the model ends it."""
