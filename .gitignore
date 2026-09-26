@@ -2,3 +2,5 @@ __pycache__/
 .direnv/
 .python-env
 checkpoints/
+data/TinyStories*
+data/*.npy
