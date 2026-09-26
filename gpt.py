@@ -177,15 +177,12 @@ def param_groups(model, weight_decay):
     The matrices are exactly the parameters with 2 or more dimensions (p.dim() >= 2).
     The biases and LayerNorm weights have 1.
     """
-    # TODO(Lilly): two lists and a return.
-    #   1. decay = every parameter p in model.parameters() with p.dim() >= 2.
-    #   2. no_decay = every other parameter.
-    #   3. return [{"params": decay, "weight_decay": weight_decay},
-    #              {"params": no_decay, "weight_decay": 0.0}]
-    #   AdamW takes this list in place of model.parameters(): each dict is a group
-    #   with its own settings. (model.parameters() gives the tied embedding only once,
-    #   so it can't end up in both groups.)
-    raise NotImplementedError
+    params = list(model.parameters())
+    decay = [p for p in params if p.dim() >= 2]
+    no_decay = [p for p in params if p.dim() < 2]
+
+    return [{"params": decay, "weight_decay": weight_decay}, 
+            {"params": no_decay, "weight_decay": 0.0}]
 
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
                 train_ids=None, val_ids=None):
