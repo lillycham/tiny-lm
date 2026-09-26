@@ -165,6 +165,28 @@ def val_loss(model, ids, device, batches=40, B=64):
     return loss
 
 # ---------- training ----------
+def param_groups(model, weight_decay):
+    """AdamW parameter groups: weight decay for the matrices, none for the rest.
+
+    Weight decay pulls every weight a little toward 0 at each step, so that no
+    weight grows big unless the loss needs it. That makes sense for the matrices:
+    the Linear weights and the embeddings. It doesn't for the rest:
+      - A LayerNorm weight is a scale that starts at 1. Pulling it to 0 fights the
+        normalisation, and there is only one per feature, so it can't overfit.
+      - A bias only shifts a value, and there are few of them.
+    The matrices are exactly the parameters with 2 or more dimensions (p.dim() >= 2).
+    The biases and LayerNorm weights have 1.
+    """
+    # TODO(Lilly): two lists and a return.
+    #   1. decay = every parameter p in model.parameters() with p.dim() >= 2.
+    #   2. no_decay = every other parameter.
+    #   3. return [{"params": decay, "weight_decay": weight_decay},
+    #              {"params": no_decay, "weight_decay": 0.0}]
+    #   AdamW takes this list in place of model.parameters(): each dict is a group
+    #   with its own settings. (model.parameters() gives the tied embedding only once,
+    #   so it can't end up in both groups.)
+    raise NotImplementedError
+
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
                 train_ids=None, val_ids=None):
     """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
@@ -173,7 +195,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     """
     if train_ids is None:
         train_ids, val_ids = torch.tensor(train), torch.tensor(val)
-    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.1)
+    opt = torch.optim.AdamW(param_groups(model, 0.1), lr=LR)
 
     def lr_at(step):
         """Warm up for WARMUP steps, then follow a cosine curve down to LR / 10."""
@@ -231,6 +253,17 @@ def load(device="cpu", path=CHECKPOINT):
     return model
 
 # ---------- checks ----------
+def check_param_groups():
+    """Count the parameters in each weight-decay group of the story model."""
+    torch.manual_seed(0)
+    model = GPT(block=256, emb=192, heads=6, layers=6, dropout=0.0, vocab=4096, gelu=True, tied=True)
+    decay, no_decay = param_groups(model, 0.1)
+    count = lambda group: sum(p.numel() for p in group["params"])
+    print(f"3. Weight decay on {len(decay['params'])} tensors, {count(decay):,} numbers;"
+          f" none on {len(no_decay['params'])} tensors, {count(no_decay):,} numbers")
+    print("   (expected 26 tensors with 3,489,792 numbers, and 44 with 11,904: 6 blocks of 4 Linear weights,"
+          " plus the 2 embeddings; the biases and LayerNorms are the rest)")
+
 def check_against_loop():
     """Copy the weights of transformer.py's MultiHeadAttention and compare the outputs."""
     from transformer import MultiHeadAttention
@@ -272,6 +305,7 @@ if __name__ == "__main__":
         parser.error("--emb must be a multiple of --heads, so every head gets the same size")
 
     check_against_loop()
+    check_param_groups()
     print(f"\n2. Time for one training step: CPU {check_speed(config, 'cpu') * 1000:.0f} ms,"
           f" MPS {check_speed(config, 'mps') * 1000:.0f} ms")
 
