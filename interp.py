@@ -15,7 +15,10 @@ predicts the repeat, and some head looks back at the token after the first copy.
     python interp.py --checkpoint checkpoints/stories_sft.pt
 """
 import argparse
+import math
+import statistics as stats
 from pathlib import Path
+
 
 import numpy as np
 import torch
@@ -91,19 +94,28 @@ def logprob(model, tok, prompt, answer):
     # The answer's tokens are the last len(a) targets.
     return sum(logp[len(p) + j, a[j]].item() for j in range(len(a)))
 
-def copy_score(model, tok, names):
-    """How much more likely " name" gets when the story mentioned it before. In nats."""
+def copy_scores(model, tok, names):
+    """For each name, how much more likely " name" gets when the story mentioned
+       it before, in nats."""
     story = "Once upon a time, there was a little girl named {}. She liked to play with her red ball. One day,"
     gains = []
     for i, name in enumerate(names):
         other = names[(i + 1) % len(names)]
         gains.append(logprob(model, tok, story.format(name), " " + name)
                      - logprob(model, tok, story.format(other), " " + name))
-    return sum(gains) / len(gains)
+    return gains
 
-def diff_score(model, tok, prompts):
-    """Mean logprob(right) - logprob(wrong) over (prompt, right, wrong)."""
-    return sum(logprob(model, tok, p, r) - logprob(model, tok, p, w) for p, r, w in prompts) / len(prompts)
+def diff_scores(model, tok, prompts):
+    """logprob(right) - logprob(wrong) for each (prompt, right, wrong)."""
+    return [logprob(model, tok, p, r) - logprob(model, tok, p, w)
+             for p, r, w in prompts]
+
+def summary(scores):
+    """ list[float] -> tuple[float, float]
+    Given a list of scores, return a mean and std. error."""
+    SE = stats.stdev(scores) / math.sqrt(len(scores))
+
+    return (stats.mean(scores), SE)
 
 def pronoun_prompts():
     out = []
@@ -164,6 +176,12 @@ def show_head(model, tok, text, layer, head):
     names = ["<eot>"] + [tok.decode([i]) for i in ids[0, 1:].tolist()]
     return "  ".join(f"{names[t]!r}->{names[w[t].argmax()]!r}" for t in range(1, len(names)))
 
+def format_stderr(pair):
+    """tuple[float, float] -> string
+    given a tuple pair of (mean, se), return a formatted string {mean:+.2f} ± {se:.2f}"""
+    return f"{pair[0]:+.2f} ± {pair[1]:.2f}"
+
+
 # ---------- checks ----------
 @torch.no_grad()
 def check_recorder(model, tok):
@@ -191,10 +209,10 @@ def run_interp(model, tok, path):
     check_recorder(model, tok)
 
     print("\n2. Name tokens:  " + "  ".join(tok.show(tok.encode(" " + n)) for n in KNOWN[:3] + UNSEEN[:5]))
-    print(f"   Copy gain, names from the data: {copy_score(model, tok, KNOWN):+.2f} nats")
-    print(f"   Copy gain, unseen names:        {copy_score(model, tok, UNSEEN):+.2f} nats")
-    print(f"   Pronoun, she/he right minus wrong:  {diff_score(model, tok, pronoun_prompts()):+.2f} nats")
-    print(f"   Ball, taker minus giver:            {diff_score(model, tok, ball_prompts()):+.2f} nats")
+    print(f"   Copy gain, names from the data: {format_stderr(summary(copy_scores(model, tok, KNOWN)))} nats")
+    print(f"   Copy gain, unseen names:        {format_stderr(summary(copy_scores(model, tok, UNSEEN)))} nats")
+    print(f"   Pronoun, she/he right minus wrong:  {format_stderr(summary(diff_scores(model, tok, pronoun_prompts())))} nats")
+    print(f"   Ball, taker minus giver:            {format_stderr(summary(diff_scores(model, tok, ball_prompts())))} nats")
     print("   (0 = no preference; above 0 = the right way)")
 
     first, repeat, scores = induction(model, common_tokens())
