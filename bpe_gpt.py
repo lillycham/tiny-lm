@@ -27,13 +27,7 @@ CHECKPOINT = Path("checkpoints/gpt_bpe.pt")
 
 def bits_per_char(loss, chars_per_token):
     """A loss in nats per token -> bits per character."""
-    # TODO(Lilly): two steps.
-    #   1. Nats per token -> nats per character. A token holds chars_per_token
-    #      characters, and its loss is the cost of guessing all of them. Share that
-    #      cost out equally between the characters.
-    #   2. Nats -> bits. A nat uses log base e and a bit uses log base 2, and
-    #      log2(x) = ln(x) / ln(2). So divide by math.log(2).
-    raise NotImplementedError
+    return loss / chars_per_token / math.log(2)
 
 def get_tokeniser(train_text):
     """Load the saved tokeniser, or train one and save it."""
@@ -55,7 +49,9 @@ if __name__ == "__main__":
     t = time.time()
     # TODO(Lilly): encode train_text and val_text with bpe, and make each one a tensor
     #   with torch.tensor(...). These replace the character IDs from data.py.
-    train_ids = val_ids = None
+    train_ids = torch.tensor(bpe.encode(train_text))
+    val_ids = torch.tensor(bpe.encode(val_text))
+
     chars_per_token = len(val_text) / len(val_ids)
     print(f"Encoded in {time.time() - t:.0f}s: {len(train_ids):,} training tokens, {len(val_ids):,} validation tokens,"
           f" {chars_per_token:.2f} characters per token", flush=True)
