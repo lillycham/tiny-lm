@@ -121,6 +121,12 @@ python main.py tokens --start "Once upon a time, Tom's cat sat."
 The trained models load their checkpoints from `checkpoints/`, so run the step
 that trains them first. Use `python main.py --help` for all options.
 
+Check the model code with the tests: tiny models on the CPU, a few seconds.
+
+```sh
+pytest
+```
+
 ## References
 
 The work this repo builds on, in the order it appears.

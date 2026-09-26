@@ -44,7 +44,7 @@
         let
           appleSilicon = pkgs.stdenv.hostPlatform.isDarwin && pkgs.stdenv.hostPlatform.isAarch64;
           pythonEnv = pkgs.python3.withPackages (ps:
-            [ ps.numpy ps.torch ] ++ pkgs.lib.optional appleSilicon (mlxFor pkgs ps));
+            [ ps.numpy ps.torch ps.pytest ] ++ pkgs.lib.optional appleSilicon (mlxFor pkgs ps));
         in
         {
           default = pkgs.mkShell {

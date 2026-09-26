@@ -5,3 +5,4 @@ checkpoints/
 data/TinyStories*
 data/*.npy
 *.log
+.pytest_cache/
