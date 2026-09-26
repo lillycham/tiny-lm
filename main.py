@@ -6,6 +6,7 @@
     python main.py torch --device mps
     python main.py attention --start "ROMEO:"
     python main.py gpt --temperature 0.8     # after python gpt.py has saved a checkpoint
+    python main.py bpe -n 250                # after python bpe_gpt.py has saved a checkpoint
 """
 import argparse
 import sys
@@ -73,8 +74,22 @@ def build_gpt(rng, args):
     loss = gpt.val_loss(model, torch.tensor(val), device)
     return loss, lambda n, rng, start: gpt.generate(model, n, start, args.temperature)
 
+def build_bpe(rng, args):
+    import torch
+    import bpe_gpt
+    import gpt
+
+    if not bpe_gpt.CHECKPOINT.exists():
+        sys.exit(f"No trained model at {bpe_gpt.CHECKPOINT}. Run python bpe_gpt.py first.")
+    torch.manual_seed(args.seed)
+    device = args.device or "mps"
+    tok = bpe_gpt.BPE.load(bpe_gpt.TOKENISER)
+    model = gpt.load(device, bpe_gpt.CHECKPOINT)
+    loss = gpt.val_loss(model, torch.tensor(tok.encode(bpe_gpt.text[bpe_gpt.split:])), device)
+    return loss, lambda n, rng, start: gpt.generate(model, n, start, args.temperature, tok.encode, tok.decode)
+
 MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": build_torch,
-          "attention": build_attention, "gpt": build_gpt}
+          "attention": build_attention, "gpt": build_gpt, "bpe": build_bpe}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -82,8 +97,11 @@ def main():
                         help="counts: count table; sgd: bigram trained with gradient descent; "
                              "mlp: 8-character context; torch: the same MLP in PyTorch; "
                              "attention: one attention head over 32 characters; "
-                             "gpt: a small transformer, loaded from the checkpoint gpt.py saves")
-    parser.add_argument("-n", type=int, default=500, help="number of characters to generate (default 500)")
+                             "gpt: a small transformer, loaded from the checkpoint gpt.py saves; "
+                             "bpe: the same transformer on BPE tokens, from the checkpoint bpe_gpt.py saves "
+                             "(its val loss is per token, not per character)")
+    parser.add_argument("-n", type=int, default=500,
+                        help="number of characters to generate, or tokens for bpe (default 500)")
     parser.add_argument("--seed", type=int, default=0, help="random seed for training and sampling (default 0)")
     parser.add_argument("--start", default="\n",
                         help="text to continue from (default newline); the bigrams use its last character")
@@ -91,9 +109,9 @@ def main():
     parser.add_argument("--steps", type=int, help="training steps (default 5000 for sgd and attention, 60000 for mlp and torch)")
     parser.add_argument("--device", choices=["cpu", "mps"],
                         help="torch: device to train on (default cpu, faster for this model); "
-                             "gpt: device to run on (default mps)")
+                             "gpt and bpe: device to run on (default mps)")
     parser.add_argument("--temperature", type=float, default=1.0,
-                        help="gpt: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
+                        help="gpt and bpe: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
     args = parser.parse_args()
     unknown = sorted(set(args.start) - set(stoi))
     if not args.start or unknown:

@@ -113,16 +113,16 @@ class Block(nn.Module):
 class GPT(nn.Module):
     """Embeddings -> blocks -> LayerNorm -> logits."""
 
-    def __init__(self, block, emb, heads, layers, dropout):
+    def __init__(self, block, emb, heads, layers, dropout, vocab=V):
         super().__init__()
-        self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout)
+        self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout, vocab=vocab)
         self.block = block
-        self.tok = nn.Embedding(V, emb)
+        self.tok = nn.Embedding(vocab, emb)
         self.pos = nn.Embedding(block, emb)
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.Sequential(*[Block(emb, heads, dropout) for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
-        self.out = nn.Linear(emb, V)
+        self.out = nn.Linear(emb, vocab)
 
     def forward(self, X):
         """X (B, T) IDs -> logits (B, T, V)."""
@@ -152,9 +152,14 @@ def val_loss(model, ids, device, batches=40, B=64):
     return loss
 
 # ---------- training ----------
-def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500):
-    """Train with AdamW. The learning rate warms up, then falls along a cosine curve."""
-    train_ids, val_ids = torch.tensor(train), torch.tensor(val)
+def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
+                train_ids=None, val_ids=None):
+    """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
+
+    Trains on the character IDs from data.py, or on train_ids and val_ids if given.
+    """
+    if train_ids is None:
+        train_ids, val_ids = torch.tensor(train), torch.tensor(val)
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.1)
 
     def lr_at(step):
@@ -181,11 +186,14 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
 
 # ---------- generate text ----------
 @torch.no_grad()
-def generate(model, n, start="\n", temperature=1.0):
-    """Sample n characters after `start`. Temperature below 1 makes safer choices."""
+def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode):
+    """Sample n tokens after `start`. Temperature below 1 makes safer choices.
+
+    The tokens are characters, unless you give another tokeniser's encode and decode.
+    """
     model.eval()
     device = next(model.parameters()).device
-    ids = torch.tensor([encode(start).tolist()], device=device)
+    ids = torch.tensor([[int(i) for i in encode(start)]], device=device)
     out = []
     for _ in range(n):
         logits = model(ids[:, -model.block:])[0, -1] / temperature
@@ -194,13 +202,13 @@ def generate(model, n, start="\n", temperature=1.0):
         out.append(char_next.item())
     return decode(out)
 
-def save(model):
+def save(model, path=CHECKPOINT):
     """Save the weights and the sizes, so load() can rebuild the same model."""
-    CHECKPOINT.parent.mkdir(exist_ok=True)
-    torch.save({"config": model.config, "weights": model.state_dict()}, CHECKPOINT)
+    path.parent.mkdir(exist_ok=True)
+    torch.save({"config": model.config, "weights": model.state_dict()}, path)
 
-def load(device="cpu"):
-    saved = torch.load(CHECKPOINT, map_location=device)
+def load(device="cpu", path=CHECKPOINT):
+    saved = torch.load(path, map_location=device)
     model = GPT(**saved["config"]).to(device)
     model.load_state_dict(saved["weights"])
     model.eval()

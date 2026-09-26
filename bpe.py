@@ -14,6 +14,7 @@ sees more of it.
 
     python bpe.py
 """
+import json
 import time
 from collections import Counter
 
@@ -72,6 +73,16 @@ class BPE:
                 break
             ids = merge(ids, pair, self.merges[pair])
         return ids
+
+    def save(self, path):
+        """Save the merges in the order they were learned. Their IDs are 256, 257, ..."""
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(list(self.merges)))
+
+    @classmethod
+    def load(cls, path):
+        pairs = json.loads(path.read_text())
+        return cls({(a, b): 256 + i for i, (a, b) in enumerate(pairs)})
 
     def decode(self, ids):
         # errors="replace": a token list can end halfway through a multi-byte character.
