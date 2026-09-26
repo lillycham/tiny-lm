@@ -7,6 +7,8 @@
     python main.py attention --start "ROMEO:"
     python main.py gpt --temperature 0.8     # after python gpt.py has saved a checkpoint
     python main.py bpe -n 250                # after python bpe_gpt.py has saved a checkpoint
+    python main.py tokens --start "Once upon a time, Tom's cat sat."
+                                             # how the two BPE tokenisers split the text
 """
 import argparse
 import sys
@@ -91,15 +93,31 @@ def build_bpe(rng, args):
 MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": build_torch,
           "attention": build_attention, "gpt": build_gpt, "bpe": build_bpe}
 
+def show_tokens(text):
+    """Print how each saved BPE tokeniser splits text, with | between the tokens."""
+    import bpe_gpt
+    import word_bpe
+
+    tokenisers = [("Shakespeare BPE (bpe.py)", bpe_gpt.TOKENISER, bpe_gpt.BPE),
+                  ("TinyStories BPE (word_bpe.py)", word_bpe.TOKENISER, word_bpe.WordBPE)]
+    for name, path, cls in tokenisers:
+        if not path.exists():
+            print(f"{name}: no tokeniser at {path} yet\n")
+            continue
+        tok = cls.load(path)
+        ids = tok.encode(text)
+        print(f"{name}: {len(ids)} tokens for {len(text)} characters\n{tok.show(ids)}\n")
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("model", choices=MODELS,
+    parser.add_argument("model", choices=[*MODELS, "tokens"],
                         help="counts: count table; sgd: bigram trained with gradient descent; "
                              "mlp: 8-character context; torch: the same MLP in PyTorch; "
                              "attention: one attention head over 32 characters; "
                              "gpt: a small transformer, loaded from the checkpoint gpt.py saves; "
                              "bpe: the same transformer on BPE tokens, from the checkpoint bpe_gpt.py saves "
-                             "(its val loss is per token, not per character)")
+                             "(its val loss is per token, not per character); "
+                             "tokens: no model, only show how the BPE tokenisers split --start")
     parser.add_argument("-n", type=int, default=500,
                         help="number of characters to generate, or tokens for bpe (default 500)")
     parser.add_argument("--seed", type=int, default=0, help="random seed for training and sampling (default 0)")
@@ -113,6 +131,10 @@ def main():
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="gpt and bpe: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
     args = parser.parse_args()
+    if args.model == "tokens":
+        # Any text works here, because both tokenisers start from bytes.
+        show_tokens(args.start)
+        return
     unknown = sorted(set(args.start) - set(stoi))
     if not args.start or unknown:
         parser.error(f"--start must be non-empty text made of characters from the training text; unknown: {unknown}")
