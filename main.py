@@ -8,6 +8,7 @@
     python main.py gpt --temperature 0.8     # after python gpt.py has saved a checkpoint
     python main.py bpe -n 250                # after python bpe_gpt.py has saved a checkpoint
     python main.py stories --temperature 0.8 # after python stories_gpt.py has saved a checkpoint
+    python main.py stories --checkpoint checkpoints/stories_gpt_384w6l.pt   # the 12M model
     python main.py sft --start Priya         # a story about a name, after python sft.py
     python main.py instruct --start "dragon, soup, happy" --features Dialogue,Twist
                                              # a story with those words, after python instruct_sft.py
@@ -16,6 +17,7 @@
 """
 import argparse
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -99,12 +101,13 @@ def build_stories(rng, args):
     import gpt
     import stories_gpt
 
-    if not stories_gpt.CHECKPOINT.exists():
-        sys.exit(f"No trained model at {stories_gpt.CHECKPOINT}. Run python stories_gpt.py first.")
+    path = args.checkpoint or stories_gpt.CHECKPOINT
+    if not path.exists():
+        sys.exit(f"No trained model at {path}. Run python stories_gpt.py first.")
     torch.manual_seed(args.seed)
     device = args.device or "mps"
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
-    model = gpt.load(device, stories_gpt.CHECKPOINT)
+    model = gpt.load(device, path)
     loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
     return loss, lambda n, rng, start: stories_gpt.story(model, tok, start, args.temperature, n)[len(start):]
 
@@ -200,6 +203,9 @@ def main():
     parser.add_argument("--features", default="",
                         help="instruct: features the story should have, separated by commas, from Dialogue, Twist, "
                              "MoralValue, BadEnding, Foreshadowing and Conflict (default none)")
+    parser.add_argument("--checkpoint", type=Path,
+                        help="stories: the model to load (default checkpoints/stories_gpt.pt;"
+                             " the 12M model is checkpoints/stories_gpt_384w6l.pt)")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="gpt, bpe, stories, sft and instruct: below 1 gives safer, more repetitive text; above 1 more random (default 1)")
     args = parser.parse_args()
