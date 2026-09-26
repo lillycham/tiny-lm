@@ -24,19 +24,21 @@ VOCAB_SIZE = 512    # 256 bytes + 256 merges
 # ---------- the two building blocks ----------
 def pair_counts(ids):
     """How often each pair of neighbours appears. [1, 2, 3, 1, 2] -> {(1, 2): 2, (2, 3): 1, (3, 1): 1}."""
-    # TODO(Lilly): one line. zip(ids, ids[1:]) gives every neighbour pair:
-    #   (ids[0], ids[1]), (ids[1], ids[2]), ... and Counter(...) counts them, like
-    #   the bigram counts at the very start. Return the Counter.
-    raise NotImplementedError
+    return Counter(zip(ids, ids[1:]))
 
 def merge(ids, pair, new_id):
     """Replace every pair in ids with new_id. merge([1, 2, 3, 1, 2], (1, 2), 99) -> [99, 3, 99]."""
-    # TODO(Lilly): walk through ids with an index i and build a new list, out.
-    #   - If ids[i] and ids[i + 1] are the pair, append new_id and jump 2 ahead.
-    #   - If not, append ids[i] and go 1 ahead.
-    #   Use a while loop, not a for loop, because i sometimes jumps by 2.
-    #   Careful at the end: the last item has no ids[i + 1].
-    raise NotImplementedError
+    i = 0
+    out = []
+    while i < len(ids):
+        if i + 1 < len(ids) and pair == (ids[i], ids[i+1]):
+            out.append(new_id)
+            i += 2
+        else:
+            out.append(ids[i])
+            i += 1
+
+    return out
 
 # ---------- the tokeniser ----------
 class BPE:
@@ -54,28 +56,21 @@ class BPE:
         ids = list(text.encode("utf-8"))
         merges = {}
         for new_id in range(256, vocab_size):
-            # TODO(Lilly): the three steps from the top of the file.
-            #   1. Count the pairs in ids.
-            #   2. Find the most common pair: max(counts, key=counts.get) gives the
-            #      key with the biggest value.
-            #   3. Merge that pair in ids, and record it: merges[pair] = new_id.
-            raise NotImplementedError
+            counts = pair_counts(ids)
+            pair = max(counts, key=counts.get)
+            ids = merge(ids, pair, new_id)
+            merges[pair] = new_id
         return cls(merges)
 
     def encode(self, s):
         """Text -> token IDs, with the merges that training learned."""
         ids = list(s.encode("utf-8"))
-        # TODO(Lilly): do the merges again, in the order they were learned. Merge
-        #   256 can use pairs that merge 255 made, so the order matters.
-        #   While ids has at least 2 items:
-        #     1. Count the pairs in ids.
-        #     2. Of those pairs, find the one that was learned first: the one with the
-        #        smallest ID in self.merges. Pairs that aren't in self.merges must lose,
-        #        so give them infinity:
-        #            min(counts, key=lambda p: self.merges.get(p, float("inf")))
-        #     3. If that pair isn't in self.merges, no pair can merge any more: break.
-        #     4. Merge it, with self.merges[pair] as the new ID.
-        raise NotImplementedError
+        while len(ids) >= 2:
+            counts = pair_counts(ids)
+            pair = min(counts, key=lambda p: self.merges.get(p, float("inf")))
+            if pair not in self.merges:
+                break
+            ids = merge(ids, pair, self.merges[pair])
         return ids
 
     def decode(self, ids):
