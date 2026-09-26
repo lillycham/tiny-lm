@@ -59,13 +59,17 @@ def request(words, features):
 
     With no features: "Tell me a story that uses the words help, mud and bossy."
     """
-    # TODO(Lilly): three steps.
-    #   1. A small helper, and_list(items): ["a", "b", "c"] -> "a, b and c", and
-    #      ["a"] -> "a". Join all but the last with ", ", then add " and " and the last.
-    #   2. text = "Tell me a story that uses the words " + and_list(words).
-    #   3. If there are features, add ", with " and and_list of their FEATURES names
-    #      (FEATURES[f] for each f). Then end with ".".
-    raise NotImplementedError
+    def and_list(items):
+        if len(items) == 1:
+            return items[0]
+        return ", ".join(items[:-1]) + " and " + items[-1]
+
+    text = "Tell me a story that uses the words " + and_list(words)
+
+    if features:
+        text += ", with " + and_list([FEATURES[f] for f in features])
+
+    return text + "."
 
 def prompt(req):
     return f"User: {req}\nAssistant: "
@@ -98,7 +102,8 @@ def words_used(story, words):
     #   "help" matches "help" and "helped" but not "whelp". re.escape keeps any
     #   punctuation in w from acting as regex syntax.
     #   sum() over True and False counts the Trues, as in name_test in sft.py.
-    raise NotImplementedError
+    return sum(bool(re.search(r"\b" + re.escape(w), story, re.IGNORECASE)) for w in words)
+
 
 def follow_test(model, tok, tests, temperature=0.8):
     """Word and dialogue scores on the held-out requests in tests."""
