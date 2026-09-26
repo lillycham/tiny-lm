@@ -121,6 +121,7 @@ class GPT(nn.Module):
         self.block = block
         self.tok = nn.Embedding(vocab, emb)
         self.pos = nn.Embedding(block, emb)
+        nn.init.normal_(self.pos.weight, std=0.02)
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu) for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
