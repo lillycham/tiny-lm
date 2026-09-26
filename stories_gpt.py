@@ -20,6 +20,7 @@ The smeared-key test: the default size with the current code, then with --smear.
 
     python stories_gpt.py --tag control     # checkpoints/stories_gpt_192w6l_control.pt
     python stories_gpt.py --smear           # checkpoints/stories_gpt_192w6l_smear.pt
+    python stories_gpt.py --smear --seed 1  # checkpoints/stories_gpt_192w6l_smear_seed1.pt
 """
 import argparse
 import math
@@ -63,15 +64,18 @@ if __name__ == "__main__":
         parser.add_argument(f"--{name}", type=int, default=CONFIG[name], help=f"default {CONFIG[name]}")
     parser.add_argument("--smear", action="store_true", help="smeared keys (not GPT-2 compatible)")
     parser.add_argument("--tag", help="a label for the checkpoint name, e.g. control")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="random seed for the starting weights and the batches (default 0)")
     args = parser.parse_args()
     config = dict(CONFIG, emb=args.emb, heads=args.heads, layers=args.layers, smear=args.smear)
     # The default model keeps its old checkpoint name, so main.py finds it. Others get their sizes
     # in the name, then _smear and the tag if given: stories_gpt_192w6l_smear.pt.
     sizes = (config["emb"], config["heads"], config["layers"])
-    if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) and not args.smear and not args.tag:
+    if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) and not (args.smear or args.tag or args.seed):
         out = CHECKPOINT
     else:
-        name = f"stories_gpt_{sizes[0]}w{sizes[2]}l" + "_smear" * args.smear + (f"_{args.tag}" if args.tag else "")
+        name = (f"stories_gpt_{sizes[0]}w{sizes[2]}l" + "_smear" * args.smear + (f"_{args.tag}" if args.tag else "")
+                + (f"_seed{args.seed}" if args.seed else ""))
         out = CHECKPOINT.with_name(name + ".pt")
     resume = out.with_suffix(".resume.pt")
 
@@ -79,7 +83,7 @@ if __name__ == "__main__":
     tok = WordBPE.load(TOKENISER)
     print(f"{len(train_ids):,} training tokens, {len(val_ids):,} validation tokens")
 
-    torch.manual_seed(0)
+    torch.manual_seed(args.seed)
     model = gpt.GPT(**config).to(args.device)
     n_params = sum(p.numel() for p in model.parameters())
     n_tokens = args.steps * B * config["block"]
