@@ -49,13 +49,16 @@ class CausalSelfAttention(nn.Module):
     use the last two axes, so every axis in front is treated as a batch axis.
     """
 
-    def __init__(self, C, n_head, dropout=0.0):
+    def __init__(self, C, n_head, dropout=0.0, smear=False):
         super().__init__()
         self.n_head = n_head
         # One layer for q, k and v of every head: C in, 3 * C out.
         self.qkv = nn.Linear(C, 3 * C, bias=False)
         self.proj = nn.Linear(C, C)
         self.drop = nn.Dropout(dropout)
+        self.smear = smear
+        if smear:
+            self.a = nn.Parameter(torch.full((n_head,), 3.0))
 
     def split_heads(self, t):
         """(B, T, C) -> (B, n_head, T, hs), where hs = C // n_head."""
@@ -72,9 +75,18 @@ class CausalSelfAttention(nn.Module):
     def forward(self, x):
         """x (B, T, C) -> (B, T, C)."""
         C = x.shape[-1]
-        q, k, v = self.qkv(x).split(C, dim=-1)
 
+        q, k, v = self.qkv(x).split(C, dim=-1)
         q, k, v = self.split_heads(q), self.split_heads(k), self.split_heads(v)
+
+        # here: k is (B, n_head, T, hs), so smear it along T (dim=2)
+        if self.smear:
+            zeros = torch.zeros_like(k[:, :, :1])
+            k_prev = torch.cat([zeros, k[:, :, :-1]], dim=2)
+
+            # k'ₜ = σ(a)·kₜ + (1 − σ(a))·kₜ₋₁        one learned number a per head
+            s = torch.sigmoid(self.a).view(-1, 1, 1)
+            k = s * k  + (1 - s) * k_prev
 
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         
@@ -94,10 +106,10 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """As in transformer.py, with the faster attention."""
 
-    def __init__(self, C, n_head, dropout, gelu=False):
+    def __init__(self, C, n_head, dropout, gelu=False, smear=False):
         super().__init__()
         self.ln1 = nn.LayerNorm(C)
-        self.attn = CausalSelfAttention(C, n_head, dropout)
+        self.attn = CausalSelfAttention(C, n_head, dropout, smear=smear)
         self.ln2 = nn.LayerNorm(C)
         self.ffwd = FeedForward(C, dropout, gelu)
 
@@ -112,18 +124,20 @@ class GPT(nn.Module):
     gelu and tied make the model like GPT-2, so it can become a Hugging Face GPT-2 model:
       - gelu: GELU in place of ReLU in every feed-forward layer.
       - tied: the output layer uses the token embedding matrix, and has no bias.
+    smearing: smearing is not gpt-2 compatible, but can be enabled with `smear=True
+    for improved capabilities.
     """
 
-    def __init__(self, block, emb, heads, layers, dropout, vocab=V, gelu=False, tied=False):
+    def __init__(self, block, emb, heads, layers, dropout, vocab=V, gelu=False, tied=False, smear=False):
         super().__init__()
         self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout, vocab=vocab,
-                           gelu=gelu, tied=tied)
+                           gelu=gelu, tied=tied, smear=smear)
         self.block = block
         self.tok = nn.Embedding(vocab, emb)
         self.pos = nn.Embedding(block, emb)
         nn.init.normal_(self.pos.weight, std=0.02)
         self.drop = nn.Dropout(dropout)
-        self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu) for _ in range(layers)])
+        self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu, smear) for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
         if tied:
             self.out = nn.Linear(emb, vocab, bias=False)
