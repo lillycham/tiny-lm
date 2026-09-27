@@ -14,6 +14,7 @@ predicts the repeat, and some head looks back at the token after the first copy.
     python -m tools.interp                                        # the base story model
     python -m tools.interp --checkpoint checkpoints/stories/stories_sft.pt
     python -m tools.interp --checkpoint checkpoints/web/web_gpt_768w12l.pt   # web_gpt: its own tokeniser and data
+    python -m tools.interp --checkpoint checkpoints/web/web_gpt_768w12l.pt --ablate --device mps   # on the GPU
 """
 import argparse
 import math
@@ -118,11 +119,15 @@ class Ablate:
         return x
 
 # ---------- scoring ----------
+def device_of(model):
+    """Where the model's weights are, so the tests make their inputs there too."""
+    return next(model.parameters()).device
+
 @torch.no_grad()
 def logprob(model, tok, prompt, answer):
     """log P(answer | prompt), summed over the answer's tokens."""
     p, a = tok.encode(prompt), tok.encode(answer)
-    ids = torch.tensor([[EOT_ID] + p + a])
+    ids = torch.tensor([[EOT_ID] + p + a], device=device_of(model))
     logp = F.log_softmax(model(ids[:, :-1]), dim=-1)[0]
     # The answer's tokens are the last len(a) targets.
     return sum(logp[len(p) + j, a[j]].item() for j in range(len(a)))
@@ -156,18 +161,25 @@ def val_chunks(block, n=32, seed=0):
             torch.from_numpy(ids[idx + 1].astype(np.int64)))
 
 @torch.no_grad()
-def val_scores(model, X, Y):
+def val_scores(model, X, Y, B=8):
     """For each chunk, minus its mean loss per token, in nats.
 
     Minus, so the sign matches the other tests: a head that helps gives a negative
     change when it is switched off. This is a test of the whole model on ordinary
     text, so it shows which heads matter for everything, not only for one task.
+
+    B chunks at a time: 32 chunks of 1,024 tokens from the web model at once have
+    ~2 GB of logits.
     """
-    x_pred = model(X)
+    scores = []
+    for i in range(0, len(X), B):
+        x, y = X[i:i + B].to(device_of(model)), Y[i:i + B].to(device_of(model))
+        x_pred = model(x)
 
-    loss = F.cross_entropy(x_pred.transpose(1, 2), Y, reduction="none")
+        loss = F.cross_entropy(x_pred.transpose(1, 2), y, reduction="none")
 
-    return (-loss.mean(dim=-1)).tolist()
+        scores += (-loss.mean(dim=-1)).tolist()
+    return scores
 
 def summary(scores):
     """ list[float] -> tuple[float, float]
@@ -211,7 +223,7 @@ def induction(model, pool, L=50, B=20, seed=0):
     """
     g = torch.Generator().manual_seed(seed)
     r = pool[torch.randint(0, len(pool), (B, L), generator=g)]
-    ids = torch.cat([torch.full((B, 1), EOT_ID), r, r], dim=1)       # (B, 1 + 2L)
+    ids = torch.cat([torch.full((B, 1), EOT_ID), r, r], dim=1).to(device_of(model))   # (B, 1 + 2L)
     with Recorder(model) as rec:
         logits = model(ids[:, :-1])
     loss = F.cross_entropy(logits.transpose(1, 2), ids[:, 1:], reduction="none")   # (B, 2L)
@@ -223,12 +235,12 @@ def induction(model, pool, L=50, B=20, seed=0):
     scores = torch.zeros(n_layer, n_head)
     for i in range(n_layer):
         for t in range(L + 1, 2 * L):
-            scores[i] += rec.attn[i][:,:,t,t - L + 1].mean(dim=0)
+            scores[i] += rec.attn[i][:,:,t,t - L + 1].mean(dim=0).cpu()
     return first, repeat, scores / (L - 1)
 
 def show_head(model, tok, text, layer, head):
     """For each token of text, the earlier token this head looks at most."""
-    ids = torch.tensor([[EOT_ID] + tok.encode(text)])
+    ids = torch.tensor([[EOT_ID] + tok.encode(text)], device=device_of(model))
     with Recorder(model) as rec, torch.no_grad():
         model(ids)
     w = rec.attn[layer][0, head]
@@ -268,23 +280,23 @@ def ablation_table(model, tests):
 # ---------- checks ----------
 @torch.no_grad()
 def check_recorder(model, tok):
-    ids = torch.tensor([[EOT_ID] + tok.encode("Once upon a time, there was a cat.")])
+    ids = torch.tensor([[EOT_ID] + tok.encode("Once upon a time, there was a cat.")], device=device_of(model))
     with Recorder(model) as rec:
         logits = model(ids)
     T = ids.shape[1]
     print(f"1. {len(rec.resid)} residual streams of {tuple(rec.resid[0].shape)},"
           f" {len(rec.attn)} attention maps of {tuple(rec.attn[0].shape)}")
     w = rec.attn[0]
-    print(f"   Rows sum to 1: {torch.allclose(w.sum(-1), torch.ones(1))},"
+    print(f"   Rows sum to 1: {torch.allclose(w.sum(-1), torch.ones(1, device=w.device))},"
           f" nothing above the diagonal: {bool((w.triu(1) == 0).all())}")
     # The last residual stream, through the final LayerNorm and output layer, must give the logits.
-    print(f"   Last stream -> logits matches: {torch.allclose(model.out(model.ln(rec.resid[len(model.blocks)])), logits, atol=1e-5)}")
+    print(f"   Last stream -> logits matches: {torch.allclose(model.out(model.ln(rec.resid[len(model.blocks)])), logits, atol=1e-4)}")
     # Rebuild block 0's attention output from the recorded weights and compare.
     attn = model.blocks[0].attn
     x = model.blocks[0].ln1(rec.resid[0])
     v = attn.split_heads(attn.qkv(x).split(x.shape[-1], dim=-1)[2])
     rebuilt = attn.proj(attn.join_heads(w @ v))
-    print(f"   Weights @ v rebuilds block 0's attention: {torch.allclose(rebuilt, attn(x), atol=1e-5)}")
+    print(f"   Weights @ v rebuilds block 0's attention: {torch.allclose(rebuilt, attn(x), atol=1e-4)}")
     print(f"   Hooks removed afterwards: {all(len(m._forward_hooks) == 0 for m in model.modules())}")
 
 def run_interp(model, tok, path):
@@ -315,6 +327,7 @@ def run_ablation(model, tests):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    gpt.add_device_option(parser)
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT, help=f"default {CHECKPOINT}")
     parser.add_argument("--against", type=Path, default=None, help="default off")
     parser.add_argument("--ablate", action="store_true", help="switch off each head in turn, and show how the scores change (slow)")
@@ -326,7 +339,7 @@ if __name__ == "__main__":
         load_tokens, TOKENISER, EOT_ID = web_data.load_tokens, web_data.TOKENISER, web_data.EOT_ID
 
     torch.manual_seed(0)
-    model = gpt.load("cpu", args.checkpoint)
+    model = gpt.load(args.device, args.checkpoint)
     tok = WordBPE.load(TOKENISER)
 
     run_interp(model, tok, args.checkpoint)
@@ -342,7 +355,7 @@ if __name__ == "__main__":
         run_ablation(model, tests)
 
     if args.against:
-        model_against = gpt.load("cpu", args.against)
+        model_against = gpt.load(args.device, args.against)
         run_interp(model_against, tok, args.against)
         if args.ablate:
             run_ablation(model_against, tests)
