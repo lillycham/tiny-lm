@@ -16,6 +16,7 @@ import torch.nn.functional as F
 
 import gpt
 from interp import Ablate, Recorder, ablation_table, val_chunks, val_scores
+from instruct_sft import output_path as instruct_path
 from stories_gpt import TOKENS, fine_tuned_path
 
 TINY = dict(block=16, emb=12, heads=3, layers=2, dropout=0.0, vocab=50)
@@ -139,6 +140,13 @@ def test_batch_from_numpy_and_torch():
     assert torch.equal(Y, X + 1)                # the targets are the next tokens
     X, Y = gpt.batch(torch.arange(100), 4, 8, "cpu")
     assert torch.equal(Y, X + 1)
+
+def test_instruct_output_path():
+    """A bigger run once had no tag, so it would have replaced the default run's model."""
+    assert instruct_path(Path("checkpoints/stories_gpt.pt")).name == "stories_instruct.pt"
+    full = Path("checkpoints/stories_gpt_384w6l_full.pt")
+    assert instruct_path(full).name == "stories_instruct_384w6l_full.pt"
+    assert instruct_path(full, "300mb").name == "stories_instruct_384w6l_full_300mb.pt"
 
 def test_fine_tuned_path():
     sft = Path("checkpoints/stories_sft.pt")

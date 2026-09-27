@@ -13,6 +13,7 @@ Features: into the request. The model starts from the base story model, not from
 sft.py's model, so the before and after are a clean comparison.
 
     python instruct_sft.py     # about 8 minutes on the GPU, with the checks
+    python instruct_sft.py --train-file data/TinyStories-Instruct-train-300MB.txt --steps 6000 --tag 300mb
     python main.py instruct --start "dragon, soup, happy"
 """
 import argparse
@@ -30,6 +31,11 @@ from word_bpe import EOT, EOT_ID, TOKENISER, WordBPE
 TRAIN_FILE = Path("data/TinyStories-Instruct-train-30MB.txt")   # the first 30 MB of the 2.7 GB file
 VAL_FILE = Path("data/TinyStories-Instruct-valid.txt")
 CHECKPOINT = Path("checkpoints/stories_instruct.pt")
+
+def output_path(base, tag=None):
+    """Where to save: stories_instruct.pt with base's sizes added, then _tag if given."""
+    out = stories_gpt.fine_tuned_path(CHECKPOINT, base)
+    return out.with_name(f"{out.stem}_{tag}.pt") if tag else out
 
 # How each feature reads in a request: "..., with dialogue and a twist."
 FEATURES = {
@@ -130,9 +136,12 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=600, help="fine-tuning steps (default 600)")
     parser.add_argument("--base", type=Path, default=stories_gpt.CHECKPOINT,
                         help=f"the model to fine-tune (default {stories_gpt.CHECKPOINT})")
+    parser.add_argument("--train-file", type=Path, default=TRAIN_FILE,
+                        help=f"the training examples (default {TRAIN_FILE})")
+    parser.add_argument("--tag", help="a label for the checkpoint name, e.g. 300mb, so it doesn't replace the default run")
     parser.add_argument("--tests", type=int, default=40, help="held-out requests to test (default 40)")
     args = parser.parse_args()
-    out = stories_gpt.fine_tuned_path(CHECKPOINT, args.base)
+    out = output_path(args.base, args.tag)
     tok = WordBPE.load(TOKENISER)
 
     print(f"1. {request(['help', 'mud', 'bossy'], ['Dialogue', 'Twist'])}")
@@ -143,7 +152,7 @@ if __name__ == "__main__":
           " (expected 2: helped and MUD count, bossy and whelp don't)")
 
     t = time.time()
-    X, Y = dataset(tok, TRAIN_FILE)
+    X, Y = dataset(tok, args.train_file)
     held_out = list(conversations(VAL_FILE))
     val = dataset(tok, VAL_FILE, limit=500)
     tests = held_out[-args.tests:]      # the end of the file, away from the 500 for the val loss
