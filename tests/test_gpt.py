@@ -6,6 +6,7 @@ Each test guards against a real bug or near-miss, named in its docstring.
     pytest -k smear     # only the tests with smear in their name or options
 """
 import itertools
+import math
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +22,7 @@ from instruct_sft import output_path as instruct_path
 from stories_gpt import TOKENS, fine_tuned_path
 
 TINY = dict(block=16, emb=12, heads=3, layers=2, dropout=0.0, vocab=50)
-OPTIONS = [dict(gelu=g, tied=t, smear=s) for g, t, s in itertools.product([False, True], repeat=3)]
+OPTIONS = [dict(gelu=g, tied=t, smear=s, scaled_init=i) for g, t, s, i in itertools.product([False, True], repeat=4)]
 CHECKPOINTS = Path(__file__).parent.parent / "checkpoints"
 
 def name(options):
@@ -60,7 +61,7 @@ def test_old_configs_still_build():
     """Checkpoints from before vocab, gelu, tied and smear have only the first five keys."""
     old = {k: TINY[k] for k in ("block", "emb", "heads", "layers", "dropout")}
     model = gpt.GPT(**old)
-    assert model.config == dict(old, vocab=gpt.V, gelu=False, tied=False, smear=False)
+    assert model.config == dict(old, vocab=gpt.V, gelu=False, tied=False, smear=False, scaled_init=False)
 
 # ---------- training ----------
 @with_options
@@ -370,3 +371,40 @@ def test_instruct_examples_read_line_by_line(tmp_path):
     assert got[0] == {"Features": "Dialogue", "Words": "cat, hat, mat", "Summary": "A cat.",
                       "Story": "The cat sat.\n\nThe end."}
     assert got[1]["Words"] == "dog, hat, mat"
+
+# ---------- scaled init (GPT-2) ----------
+DEEP = dict(block=16, emb=64, heads=4, layers=8, dropout=0.0, vocab=50)   # big enough to measure a std
+
+def residual_writers(model):
+    """The layers that add to the residual stream: attention's proj, and the feed-forward's second Linear."""
+    return [layer for b in model.blocks for layer in (b.attn.proj, b.ffwd.net[2])]
+
+def test_scaled_init_shrinks_the_residual_writers():
+    """std 0.02 / sqrt(2 x layers): 24 writes into the stream in a 12-layer model."""
+    torch.manual_seed(0)
+    model = gpt.GPT(**DEEP, scaled_init=True)
+    want = 0.02 / math.sqrt(2 * DEEP["layers"])                       # 0.005
+    for layer in residual_writers(model):
+        assert layer.weight.std().item() == pytest.approx(want, rel=0.1)
+        assert layer.weight.mean().abs().item() < want / 5
+
+def test_scaled_init_changes_nothing_else():
+    """The re-init comes after everything is built, so with the same seed every other
+       weight is the same as without it."""
+    torch.manual_seed(0)
+    plain = gpt.GPT(**DEEP)
+    torch.manual_seed(0)
+    scaled = gpt.GPT(**DEEP, scaled_init=True)
+    changed = {id(l.weight) for l in residual_writers(scaled)} | {id(l.bias) for l in residual_writers(scaled)}
+    for (name, p), q in zip(scaled.named_parameters(), plain.parameters()):
+        if id(p) not in changed:
+            assert torch.equal(p, q), name
+    assert not torch.equal(residual_writers(scaled)[0].weight, residual_writers(plain)[0].weight)
+
+def test_scaled_init_is_off_by_default():
+    """Old checkpoints have no scaled_init in their config, so off must be the default."""
+    assert gpt.GPT(**DEEP).config["scaled_init"] is False
+    torch.manual_seed(0)
+    plain = gpt.GPT(**DEEP)
+    for layer in residual_writers(plain):                             # PyTorch's own init: much wider
+        assert layer.weight.std().item() > 0.02
