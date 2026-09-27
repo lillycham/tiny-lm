@@ -149,14 +149,15 @@ rsync -avP data/tinystories_train.npy data/tinystories_val.npy HOST:tiny-lm/data
 
 # On the rented machine: time 200 steps, then start the real run
 python stories_gpt.py --emb 384 --steps 200 --tag timing
-nohup python stories_gpt.py --emb 384 --steps 67500 --tag full --snapshots > full.log 2>&1 &
+nohup python stories_gpt.py --emb 384 --steps 67500 --tag full --snapshots --compile > full.log 2>&1 &
 
 # On the Mac: get the model and its snapshots back
 rsync -avP HOST:tiny-lm/checkpoints/stories_gpt_384w6l_full.pt checkpoints/
 rsync -avP HOST:tiny-lm/checkpoints/snapshots/ checkpoints/snapshots/
 ```
 
-67,500 steps of 32 × 256 tokens is one pass over the training set. Always
+67,500 steps of 32 × 256 tokens is one pass over the training set. `--compile`
+makes the steps faster on CUDA, but the first step takes 30-60 seconds to compile. Always
 give a rented run a `--tag`: without one, `--emb 384` saves to
 `stories_gpt_384w6l.pt`, and the copy back replaces the 12M model on the Mac.
 The run saves a resume file every 30 minutes. If the machine stops, run the

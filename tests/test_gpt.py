@@ -281,3 +281,46 @@ def test_device_option(device):
     assert parser.parse_args([]).device == gpt.default_device()
     assert parser.parse_args(["--device", device]).device == device
     gpt.synchronize(device)
+
+# ---------- torch.compile ----------
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_compiled_training_saves_plain_weights(tmp_path, snapshot, monkeypatch):
+    """torch.compile wraps the model, and the wrapper's state_dict names every weight
+       _orig_mod.<name>. Saved from the wrapper, a checkpoint won't load into a plain GPT."""
+    # A torch.compile that records its use, with a backend that runs the graph as it is:
+    # the same wrapper and the same names, but no C++ compiler, so the test is fast.
+    real_compile, compiled, ran = torch.compile, [], []
+    def backend(graph, example_inputs):
+        ran.append(1)
+        return graph.forward
+    def recording_compile(m, **options):
+        compiled.append(m)
+        return real_compile(m, backend=backend)
+    monkeypatch.setattr(torch, "compile", recording_compile)
+
+    model = tiny()
+    before = {n: p.detach().clone() for n, p in model.named_parameters()}
+    ids = torch.randint(0, TINY["vocab"], (500,))
+    resume = tmp_path / "tiny.resume.pt"
+    gpt.train_model(model, "cpu", STEPS=70, B=2, WARMUP=2, log_every=0, train_ids=ids, val_ids=ids,
+                    resume=resume, resume_minutes=0, compile=True,
+                    snapshots=tmp_path / "snaps" / "tiny" if snapshot else None)
+    assert compiled == [model] and ran                    # it trained through the compiled model
+    assert any(not torch.equal(before[n], p) for n, p in model.named_parameters())   # and model learned
+    names = set(model.state_dict())
+    assert set(torch.load(resume, weights_only=False)["weights"]) == names
+    if snapshot:
+        assert set(torch.load(tmp_path / "snaps" / "tiny_step64.pt")["weights"]) == names
+    gpt.save(model, tmp_path / "model.pt")
+    gpt.load("cpu", tmp_path / "model.pt")
+
+def test_no_compile_by_default(monkeypatch):
+    monkeypatch.setattr(torch, "compile", lambda *a, **k: pytest.fail("compiled without compile=True"))
+    ids = torch.randint(0, TINY["vocab"], (500,))
+    gpt.train_model(tiny(), "cpu", STEPS=5, B=2, WARMUP=2, log_every=0, train_ids=ids, val_ids=ids)
+
+def test_trains_on_shakespeare_by_default():
+    """Without train_ids, train_model uses gpt.train, the Shakespeare text. A local
+       variable named train in train_model once hid it."""
+    model = gpt.GPT(**dict(TINY, vocab=gpt.V))
+    gpt.train_model(model, "cpu", STEPS=3, B=2, WARMUP=1, log_every=0)

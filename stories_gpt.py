@@ -66,6 +66,8 @@ if __name__ == "__main__":
     parser.add_argument("--tag", help="a label for the checkpoint name, e.g. control")
     parser.add_argument("--snapshots", action="store_true",
                         help="also save the model at steps 64, 128, 256, ... in checkpoints/snapshots/")
+    parser.add_argument("--compile", action="store_true",
+                        help="train through torch.compile: faster on CUDA, not for MPS (default off)")
     parser.add_argument("--seed", type=int, default=0,
                         help="random seed for the starting weights and the batches (default 0)")
     args = parser.parse_args()
@@ -99,7 +101,8 @@ if __name__ == "__main__":
     t = time.time()
     gpt.train_model(model, args.device, STEPS=args.steps, B=B, LR=args.lr, log_every=1000,
                     train_ids=train_ids, val_ids=val_ids, resume=resume,
-                    snapshots=out.parent / "snapshots" / out.stem if args.snapshots else None)
+                    snapshots=out.parent / "snapshots" / out.stem if args.snapshots else None,
+                    compile=args.compile)
     gpt.save(model, out)
     resume.unlink(missing_ok=True)     # finished: a new run with the same sizes starts from scratch
     print(f"\nTrained in {(time.time() - t) / 60:.0f} minutes. Saved to {out}\n")
