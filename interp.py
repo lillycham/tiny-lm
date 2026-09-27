@@ -13,6 +13,7 @@ predicts the repeat, and some head looks back at the token after the first copy.
 
     python interp.py                                        # the base story model
     python interp.py --checkpoint checkpoints/stories_sft.pt
+    python interp.py --checkpoint checkpoints/web_gpt_768w12l.pt   # web_gpt: its own tokeniser and data
 """
 import argparse
 import math
@@ -25,6 +26,7 @@ import torch
 import torch.nn.functional as F
 
 import gpt
+import web_data
 from attention import attention
 from stories_gpt import CHECKPOINT, load_tokens
 from word_bpe import EOT_ID, TOKENISER, WordBPE
@@ -317,6 +319,11 @@ if __name__ == "__main__":
     parser.add_argument("--against", type=Path, default=None, help="default off")
     parser.add_argument("--ablate", action="store_true", help="switch off each head in turn, and show how the scores change (slow)")
     args = parser.parse_args()
+
+    if args.checkpoint.name.startswith("web_gpt"):
+        # The functions above read these module globals, so the web model gets its own
+        # tokeniser, validation text and <|endoftext|> ID. (Not for --against a story model.)
+        load_tokens, TOKENISER, EOT_ID = web_data.load_tokens, web_data.TOKENISER, web_data.EOT_ID
 
     torch.manual_seed(0)
     model = gpt.load("cpu", args.checkpoint)
