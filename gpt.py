@@ -135,10 +135,11 @@ class GPT(nn.Module):
     for improved capabilities.
     """
 
-    def __init__(self, block, emb, heads, layers, dropout, vocab=V, gelu=False, tied=False, smear=False):
+    def __init__(self, block, emb, heads, layers, dropout, vocab=V, gelu=False,
+                  tied=False, smear=False, scaled_init=False):
         super().__init__()
         self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout, vocab=vocab,
-                           gelu=gelu, tied=tied, smear=smear)
+                           gelu=gelu, tied=tied, smear=smear, scaled_init=scaled_init)
         self.block = block
         self.tok = nn.Embedding(vocab, emb)
         self.pos = nn.Embedding(block, emb)
@@ -146,12 +147,19 @@ class GPT(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu, smear) for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
+
         if tied:
             self.out = nn.Linear(emb, vocab, bias=False)
             nn.init.normal_(self.tok.weight, std=0.02)
             self.out.weight = self.tok.weight
         else:
             self.out = nn.Linear(emb, vocab)
+
+        if scaled_init:
+            for b in self.blocks:
+                for layer in (b.attn.proj, b.ffwd.net[2]):
+                    nn.init.normal_(layer.weight, std=0.02 / math.sqrt(2 * layers))
+                    nn.init.zeros_(layer.bias)
 
     def forward(self, X):
         """X (B, T) IDs -> logits (B, T, V)."""
