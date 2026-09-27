@@ -8,3 +8,4 @@ data/*.npy
 .pytest_cache/
 data/*.parquet
 data/*.bin
+data/*.jsonl

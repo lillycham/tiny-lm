@@ -47,13 +47,13 @@ def conversations(max_bytes):
         if m:
             yield m.group(1), prompt(m.group(1)), story
 
-def make_example(tok, prompt, answer):
-    """One conversation -> (x, y), two lists of BLOCK token IDs. None if too long.
+def make_example(tok, prompt, answer, block=BLOCK):
+    """One conversation -> (x, y), two lists of block token IDs. None if too long.
 
     x is the input and y the targets, shifted by one as in every model so far.
     """
     ids = tok.encode(prompt) + tok.encode(answer) + [tok.eot_id]
-    if len(ids) > BLOCK + 1:
+    if len(ids) > block + 1:
         return None
     # TODO(Lilly): four steps.
     #   1. x = ids[:-1] and y = ids[1:], as in gpt.batch.
@@ -69,7 +69,7 @@ def make_example(tok, prompt, answer):
 
     y[:P - 1] = [IGNORE] * (P - 1)
 
-    pad = BLOCK - len(x)
+    pad = block - len(x)
 
     return x + [tok.eot_id] * pad, y + [IGNORE] * pad
 
