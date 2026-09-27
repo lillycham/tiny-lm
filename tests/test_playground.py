@@ -194,3 +194,19 @@ def test_chat_models_open_the_chat_tab(tmp_path):
     assert kinds == {"web_gpt_768w12l.pt": ("story", "web"),
                      "web_gpt_768w12l_anneal25_chat.pt": ("chat", "web"),
                      "web_gpt_768w12l_anneal25_chat_s250.pt": ("chat", "web")}
+
+def test_models_fine_tuned_from_the_web_model_use_its_tokeniser():
+    for name in ["stories_instruct_web_gpt_768w12l_anneal_300mb_6k.pt", "web_gpt_768w12l_anneal25_chat.pt"]:
+        assert pg.family(Path(name)) == "web"
+    assert pg.family(Path("stories_instruct_384w6l_full.pt")) == "stories"
+    assert pg.kind(Path("stories_instruct_web_gpt_768w12l_anneal_300mb.pt")) == "instruct"
+
+def test_an_error_while_streaming_is_one_more_line(server, monkeypatch):
+    """Tokens are already sent, so the error can't be a new HTTP response."""
+    def broken(*args, **kwargs):
+        yield {"id": 1, "piece": "a", "text": "a", "p": 0.5, "top": []}
+        raise KeyError(6245)
+    monkeypatch.setattr(pg, "sample", broken)
+    lines = [json.loads(l) for l in call(server + "/api/generate", {"model": "stories_gpt_tiny.pt", "text": "Hi"}).splitlines()]
+    assert [m["type"] for m in lines] == ["start", "token", "error"]
+    assert "KeyError" in lines[-1]["error"]
