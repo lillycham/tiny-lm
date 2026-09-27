@@ -19,6 +19,7 @@ system line names only the other. The test names never appear in training.
     python -m web.system_sft            # ~10-15 min on the Mac, with the tests before and after
 """
 import argparse
+from functools import reduce
 import random
 import re
 import statistics as st
@@ -40,7 +41,7 @@ BASE = Path("checkpoints/web/web_gpt_768w12l_anneal25.pt")
 BEFORE = Path("checkpoints/web/web_gpt_768w12l_anneal25_chat_s250.pt")   # the chat model, to compare with
 
 # ---------- rules ----------
-def sentences(text):
+def sentences(text: str):
     """Split text into sentences: after . ! or ? and a space, and at every line break
     (Dolly's lists have one item per line). Rough, but enough here."""
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text.strip()) if s.strip()]
@@ -49,72 +50,56 @@ def sentences(text):
 # follows it (check). apply(answer) must always pass check. Answers are Dolly's, so
 # they can be one word, several paragraphs, or a list already.
 
-def apply_one_sentence(answer):
-    # TODO(Lilly): the first sentence of answer. sentences() gives them as a list.
-    raise NotImplementedError
+def apply_one_sentence(answer: str):    
+    return sentences(answer)[0]
 
-def check_one_sentence(answer):
-    # TODO(Lilly): True if answer is exactly one sentence.
-    raise NotImplementedError
+def check_one_sentence(answer: str):
+    return len(sentences(answer)) == 1
 
-def apply_capitals(answer):
-    # TODO(Lilly): all in capital letters. Strings have a method for it.
-    raise NotImplementedError
+def apply_capitals(answer: str):
+    return answer.upper()
 
-def check_capitals(answer):
-    # TODO(Lilly): True if no letter is lowercase. Careful: "123" has no lowercase
-    #   letters either. Is that a pass? (It's fine either way; just decide.)
-    raise NotImplementedError
+def check_capitals(answer : str):
+    return answer.upper() == answer
 
-def apply_lowercase(answer):          # held out
-    # TODO(Lilly): all in lowercase letters.
-    raise NotImplementedError
+def apply_lowercase(answer: str):
+    return answer.lower()
 
-def check_lowercase(answer):
-    # TODO(Lilly): True if no letter is uppercase.
-    raise NotImplementedError
+def check_lowercase(answer: str):
+    return answer.lower() == answer 
 
 def apply_start_with(word):
     """A rule's apply that starts the answer with word: "Well," or "Sure!"."""
     def apply(answer):
-        # TODO(Lilly): word, a space, then the answer, stripped. Make the answer's first letter
-        #   lowercase after "Well," ("Well, camels use..."), but keep it after "Sure!"
-        #   ("Sure! Camels use..."). Hint: word.endswith("!").
-        raise NotImplementedError
+        answer = answer.strip()
+        if not word.endswith("!"):
+            answer = answer[:1].lower() + answer[1:]
+        return f"{word} {answer}"
     return apply
 
 def check_start_with(word):
     def check(answer):
-        # TODO(Lilly): True if answer starts with word.
-        raise NotImplementedError
+        return answer.startswith(word)
     return check
 
 def apply_question(answer):
-    # TODO(Lilly): the answer, then " Does that help?" at the end. strip() it first,
-    #   so the question doesn't come after a trailing newline.
-    raise NotImplementedError
+    return answer.strip() + " Does that help?"
 
-def check_question(answer):
-    # TODO(Lilly): True if the answer ends with "?" (ignoring spaces at the end).
-    raise NotImplementedError
+def check_question(answer: str):
+    return answer.rstrip()[-1:] == "?"
 
-def apply_list(answer):
-    # TODO(Lilly): each sentence on its own line, after "- ". "\n".join(...) joins lines.
-    raise NotImplementedError
+def apply_list(answer: str):
+    return "\n".join("- " + s for s in sentences(answer))
 
-def check_list(answer):
-    # TODO(Lilly): True if every line starts with "- ". answer.splitlines() gives the
-    #   lines. Skip empty lines, and an empty answer isn't a list.
-    raise NotImplementedError
+def check_list(answer: str):
+    lines = [s for s in answer.splitlines() if s.strip()]
+    return len(lines) > 0 and all(s.startswith("- ") for s in lines)
 
-def apply_quotes(answer):
-    # TODO(Lilly): the answer in double quotes: "...". strip() it first.
-    raise NotImplementedError
+def apply_quotes(answer: str):
+    return '"' + answer.strip() + '"'
 
-def check_quotes(answer):
-    # TODO(Lilly): True if it starts and ends with a double quote, and is longer than
-    #   one character (a lone '"' does both).
-    raise NotImplementedError
+def check_quotes(answer: str):
+    return len(answer) > 1 and answer.startswith('"') and answer.endswith('"') 
 
 class Rule(NamedTuple):
     system: str
