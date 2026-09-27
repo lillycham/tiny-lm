@@ -68,6 +68,8 @@ def test_prompts_match_training():
     assert pg.build_prompt("chat", question="Why?", context="Text.") == (chat_sft.prompt("Why?", "Text."), False)
     got, _ = pg.build_prompt("chat", question="And Spain?", history=[["Capital of France?", "", " Paris. "]])
     assert got == "User: Capital of France?\nAssistant: Paris.\nUser: And Spain?\nAssistant: "
+    got, _ = pg.build_prompt("chat", question="Hi", system=" Be brief. ")
+    assert got == "System: Be brief.\nUser: Hi\nAssistant: "
     for bad in [dict(mode="name"), dict(mode="instruct", words=" , "), dict(mode="chat", question=" "),
                 dict(mode="chat", question="Hi", history=[["only two", "items"]]),
                 dict(mode="instruct", words="cat", features=["Sad"]), dict(mode="poem")]:
