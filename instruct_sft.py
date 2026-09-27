@@ -21,6 +21,7 @@ import re
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 import gpt
@@ -49,15 +50,20 @@ FEATURES = {
 FIELD = re.compile(r"^(Features|Words|Summary|Random sentence|Story):[ \t]*", re.M)
 
 def examples(path):
-    """Each example in the file as a dict of its fields, in their order, as strings."""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    chunks = text.split(EOT)
-    if not text.rstrip().endswith(EOT):
-        chunks = chunks[:-1]        # the file was cut off in the middle of the last one
-    for chunk in chunks:
-        # re.split with a group gives ["", name, value, name, value, ...].
-        parts = FIELD.split(chunk.strip())
-        yield dict(zip(parts[1::2], (v.strip() for v in parts[2::2])))
+    """Each example in the file as a dict of its fields, in their order, as strings.
+
+    Read line by line, so even the full 2.7 GB file needs little memory. Text after
+    the last <|endoftext|> is dropped: the file was cut off in the middle of it.
+    """
+    chunk = ""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            chunk += line
+            while EOT in chunk:
+                done, chunk = chunk.split(EOT, 1)
+                # re.split with a group gives ["", name, value, name, value, ...].
+                parts = FIELD.split(done.strip())
+                yield dict(zip(parts[1::2], (v.strip() for v in parts[2::2])))
 
 def request(words, features):
     """(["help", "mud", "bossy"], ["Dialogue", "Twist"]) ->
@@ -90,16 +96,23 @@ def conversations(path):
         yield words, features, prompt(request(words, features)), ex["Story"]
 
 def dataset(tok, path, limit=None):
-    """Every conversation that fits in the context, as two (N, BLOCK) tensors."""
+    """Every conversation that fits in the context, as two (N, BLOCK) int16 tensors.
+
+    int16 holds every token ID (under 4,096) and the -100 mask. A Python list of 256
+    ints costs about 9 KB, so the full 2.7 GB file as lists would need about 17 GB;
+    as int16 rows it needs about 1 GB. fine_tune and answer_loss make each batch int64.
+    """
     X, Y = [], []
     for words, features, p, story in conversations(path):
         ex = sft.make_example(tok, p, story)
         if ex:
-            X.append(ex[0])
-            Y.append(ex[1])
+            X.append(np.array(ex[0], dtype=np.int16))
+            Y.append(np.array(ex[1], dtype=np.int16))
             if limit and len(X) == limit:
                 break
-    return torch.tensor(X), torch.tensor(Y)
+    if not X:
+        raise ValueError(f"No conversations in {path} fit in the context")
+    return torch.from_numpy(np.stack(X)), torch.from_numpy(np.stack(Y))
 
 def words_used(story, words):
     """How many of words appear in story. "help" counts in "helped", and case doesn't matter."""

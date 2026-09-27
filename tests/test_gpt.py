@@ -16,6 +16,7 @@ import torch.nn.functional as F
 
 import gpt
 from interp import Ablate, Recorder, ablation_table, val_chunks, val_scores
+import instruct_sft
 from instruct_sft import output_path as instruct_path
 from stories_gpt import TOKENS, fine_tuned_path
 
@@ -332,3 +333,40 @@ def test_trains_on_shakespeare_by_default():
        variable named train in train_model once hid it."""
     model = gpt.GPT(**dict(TINY, vocab=gpt.V))
     gpt.train_model(model, "cpu", STEPS=3, B=2, WARMUP=1, log_every=0)
+
+# ---------- SFT data ----------
+@pytest.mark.skipif(not instruct_sft.VAL_FILE.exists() or not TOKENS.parent.joinpath("..", "checkpoints", "stories_bpe.json").exists(),
+                    reason="needs TinyStories-Instruct-valid.txt and the tokeniser")
+def test_instruct_dataset_is_compact_and_unchanged():
+    """The full instruct file as Python lists needed ~17 GB, too much for a 32 GB machine."""
+    from word_bpe import TOKENISER, WordBPE
+    import sft
+    tok = WordBPE.load(TOKENISER)
+    X, Y = instruct_sft.dataset(tok, instruct_sft.VAL_FILE, limit=20)
+    assert X.dtype == Y.dtype == torch.int16 and X.shape == Y.shape == (20, sft.BLOCK)
+    lists = [sft.make_example(tok, p, story) for _, _, p, story in instruct_sft.conversations(instruct_sft.VAL_FILE)]
+    lists = [ex for ex in lists if ex][:20]
+    assert torch.equal(X.long(), torch.tensor([x for x, _ in lists]))
+    assert torch.equal(Y.long(), torch.tensor([y for _, y in lists]))       # -100 survives int16
+
+def test_fine_tune_takes_int16():
+    import sft
+    model = gpt.GPT(**dict(TINY, block=sft.BLOCK, vocab=4096))
+    torch.manual_seed(2)
+    X = torch.randint(0, 4096, (8, sft.BLOCK))
+    Y = X.roll(-1, dims=1)
+    Y[:, :100] = sft.IGNORE
+    small = (X.to(torch.int16), Y.to(torch.int16))
+    assert sft.answer_loss(model, *small, "cpu") == pytest.approx(sft.answer_loss(model, X, Y, "cpu"))
+    sft.fine_tune(model, *small, "cpu", STEPS=3, B=4)
+
+def test_instruct_examples_read_line_by_line(tmp_path):
+    """examples() once read the whole file into memory: ~6 GB for the full file."""
+    ex = "Features: Dialogue\nWords: cat, hat, mat\nSummary: A cat.\nStory: \n\nThe cat sat.\n\nThe end.\n"
+    path = tmp_path / "instruct.txt"
+    path.write_text(ex + "<|endoftext|>\n" + ex.replace("cat,", "dog,") + "<|endoftext|>" + "Words: cut off, in the mid")
+    got = list(instruct_sft.examples(path))
+    assert len(got) == 2                                   # the cut-off one is dropped
+    assert got[0] == {"Features": "Dialogue", "Words": "cat, hat, mat", "Summary": "A cat.",
+                      "Story": "The cat sat.\n\nThe end."}
+    assert got[1]["Words"] == "dog, hat, mat"

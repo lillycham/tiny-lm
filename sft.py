@@ -90,7 +90,7 @@ def answer_loss(model, X, Y, device, B=64):
     model.eval()
     total = n = 0
     for i in range(0, len(X), B):
-        x, y = X[i:i + B].to(device), Y[i:i + B].to(device)
+        x, y = X[i:i + B].to(device).long(), Y[i:i + B].to(device).long()   # int16 in instruct_sft
         k = (y != IGNORE).sum().item()
         total += gpt.lm_loss(model, x, y).item() * k
         n += k
@@ -118,7 +118,7 @@ def fine_tune(model, X, Y, device, STEPS, B=32, LR=3e-4, WARMUP=50, val=None):
         for group in opt.param_groups:
             group["lr"] = LR * min(1, (step + 1) / WARMUP)
         i = torch.randint(0, len(X), (B,))
-        loss = gpt.lm_loss(model, X[i].to(device), Y[i].to(device))
+        loss = gpt.lm_loss(model, X[i].to(device).long(), Y[i].to(device).long())
         opt.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
