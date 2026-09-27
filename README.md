@@ -67,6 +67,47 @@ use the one that pretraining built.
 `gpt.py` also has an experimental option, `smear`: smeared keys (Olsson et al.,
 2022), so that one head can do induction on its own. It isn't GPT-2 compatible.
 
+## Part 3: FineWeb-Edu
+
+A GPT-2 small shaped model on general English from the web, trained on one
+rented RTX 5090.
+
+| File            | What it does                                                            |
+|-----------------|-------------------------------------------------------------------------|
+| `web_data.py`   | A 16,384-token tokeniser for FineWeb-Edu (4.20 characters per token), and parallel encoding of Parquet files into `uint16` token files, on every CPU core |
+| `web_gpt.py`    | The web model: 12 layers, width 768, 12 heads, 1,024 tokens of context, GPT-2's scaled init, gradient accumulation |
+| `anneal.py`     | A short last stage of training on SimpleStories mixed with web text, as the learning rate falls |
+| `chat_sft.py`   | Supervised fine-tuning on Dolly 15k: a general question-and-answer model |
+
+`instruct_sft.py`, `interp.py` and the playground also work with the web models.
+
+| Model                        | Parameters | Tokens seen | Val loss (nats/token) | Bits/char | Time on a 5090 |
+|------------------------------|-----------:|------------:|----------------------:|----------:|---------------:|
+| Web GPT                      |      98.4M |       2.70B |                 2.983 |      1.03 |        203 min |
+| + anneal, 25% SimpleStories  |      98.4M |       +150M |                 2.982 |      1.03 |        +12 min |
+
+For comparison, OpenAI's GPT-2 small is about 1.04 bits per character on
+FineWeb-Edu, and Karpathy's build-nanogpt run of the same model on 10B tokens
+about 0.97. The text it writes is fluent, but most facts are invented.
+
+### What we found
+
+- **Induction heads form suddenly**, between steps 512 and 1,024, all in layer
+  7. At the same time, the gain from copying an unseen name jumps from +3 to
+  +13 nats.
+- **"Who gets the ball" comes late.** For most of the run the model prefers the
+  giver, the name it saw last, as a plain copier would. It only moves toward
+  the right answer near the end, and stays within the noise.
+- **An anneal teaches a style without forgetting.** 150M tokens with 25%
+  SimpleStories lower the story loss from 3.13 to 1.97, with no change in the
+  web loss. The pronoun test triples. The induction heads don't change.
+- **A bigger base needs a longer SFT.** On the instruct task, the web model uses
+  88 of 120 required words after 3,000 steps, and 104 after 6,000, the same as
+  the best story model.
+- **The chat model has the right form but not the facts.** It answers in lists,
+  verse or one line as asked, and follows up across turns. But it invents
+  facts, and doesn't yet take answers from a paragraph in its context.
+
 ## Setup
 
 The flake gives a Python with NumPy and PyTorch:
@@ -185,6 +226,14 @@ The work this repo builds on, in the order it appears.
   bigram-to-GPT path follows the one in his [nanoGPT](https://github.com/karpathy/nanoGPT) and makemore work.
 - Ronen Eldan and Yuanzhi Li, [TinyStories: How Small Can Language Models Be and Still Speak Coherent
   English?](https://arxiv.org/abs/2305.07759) (2023): the TinyStories and TinyStoriesInstruct datasets.
+- Guilherme Penedo et al., [The FineWeb Datasets](https://arxiv.org/abs/2406.17557) (2024): FineWeb-Edu, the
+  web text of Part 3.
+- [SimpleStories](https://huggingface.co/datasets/SimpleStories/SimpleStories) (Finke et al., 2025): the stories
+  for the anneal.
+- Databricks, [Dolly 15k](https://huggingface.co/datasets/databricks/databricks-dolly-15k) (2023, CC BY-SA
+  3.0): the questions and answers for `chat_sft.py`.
+- Andrej Karpathy, [build-nanogpt](https://github.com/karpathy/build-nanogpt) (2024): GPT-2 small on
+  FineWeb-Edu, the comparison for Part 3.
 
 **Models**
 - Yoshua Bengio et al., [A Neural Probabilistic Language Model](https://www.jmlr.org/papers/v3/bengio03a.html)
@@ -217,6 +266,8 @@ The work this repo builds on, in the order it appears.
   Restarts](https://arxiv.org/abs/1608.03983) (2017): the cosine learning-rate schedule.
 - Jordan Hoffmann et al., [Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556)
   (2022): about 20 training tokens per parameter.
+- Niklas Muennighoff et al., [Scaling Data-Constrained Language Models](https://arxiv.org/abs/2305.16264)
+  (2023): repeated epochs are nearly as good as new data.
 - Long Ouyang et al., [Training Language Models to Follow Instructions with Human
   Feedback](https://arxiv.org/abs/2203.02155) (2022): supervised fine-tuning.
 
