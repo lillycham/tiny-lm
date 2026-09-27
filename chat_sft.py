@@ -42,6 +42,11 @@ def prompt(instruction, context=""):
         return f"User: {instruction.strip()}\n\n{context.strip()}\nAssistant: "
     return f"User: {instruction.strip()}\nAssistant: "
 
+def conversation(history, question, context=""):
+    """The prompt for question after earlier turns, each (question, context, answer) written
+    as in training, one after another. Dolly has no follow-ups, so the model never saw this."""
+    return "".join(prompt(q, c) + a.strip() + "\n" for q, c, a in history) + prompt(question, context)
+
 def load_rows(path=DOLLY):
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
