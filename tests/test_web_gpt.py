@@ -17,6 +17,7 @@ def test_the_default_model_is_gpt2_small_sized():
     assert blocks == 12 * (12 * C * C + 6 * C + 4 * C) + 2 * C
     assert 84e6 < blocks < 86e6 and 97e6 < total < 99e6
     assert model.out.weight is model.tok.weight                     # tied: the embedding counts once
+    assert model.config["scaled_init"]                              # 12 layers: 24 writes to the stream
 
 def test_steps_for():
     assert wg.steps_for(2.7e9, 32, 1024) == 82_397

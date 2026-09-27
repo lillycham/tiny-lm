@@ -24,7 +24,8 @@ import web_data
 from web_data import EOT_ID, TOKENISER, VOCAB_SIZE
 from word_bpe import WordBPE
 
-CONFIG = dict(block=1024, emb=768, heads=12, layers=12, dropout=0.0, vocab=VOCAB_SIZE, gelu=True, tied=True)
+CONFIG = dict(block=1024, emb=768, heads=12, layers=12, dropout=0.0, vocab=VOCAB_SIZE, gelu=True, tied=True,
+              scaled_init=True)
 CHECKPOINTS = Path("checkpoints")
 PROMPTS = ["The water cycle is", "In 1905, Albert Einstein", "To make bread, you need"]
 
@@ -60,12 +61,15 @@ if __name__ == "__main__":
     parser.add_argument("--snapshots", action="store_true",
                         help="also save the model at steps 64, 128, 256, ... in checkpoints/snapshots/")
     parser.add_argument("--compile", action="store_true", help="train through torch.compile: for CUDA")
+    parser.add_argument("--scaled-init", action=argparse.BooleanOptionalAction, default=CONFIG["scaled_init"],
+                        help="GPT-2's smaller init for the layers that write to the residual stream (default on)")
     parser.add_argument("--seed", type=int, default=0, help="random seed (default 0)")
     args = parser.parse_args()
     if args.emb % args.heads:
         parser.error("--emb must be a multiple of --heads, so every head gets the same size")
 
-    config = dict(CONFIG, block=args.block, emb=args.emb, heads=args.heads, layers=args.layers)
+    config = dict(CONFIG, block=args.block, emb=args.emb, heads=args.heads, layers=args.layers,
+                  scaled_init=args.scaled_init)
     out = checkpoint_path(config, args.tag)
     resume = out.with_suffix(".resume.pt")
     steps = steps_for(args.tokens, args.batch, args.block)
