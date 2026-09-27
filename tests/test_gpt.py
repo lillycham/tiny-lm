@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import gpt
-from interp import Recorder
+from interp import Ablate, Recorder
 from stories_gpt import fine_tuned_path
 
 TINY = dict(block=16, emb=12, heads=3, layers=2, dropout=0.0, vocab=50)
@@ -170,3 +170,47 @@ def test_training_saves_snapshots(tmp_path):
                     train_ids=ids, val_ids=ids, snapshots=tmp_path / "snaps" / "tiny")
     assert sorted(p.name for p in (tmp_path / "snaps").iterdir()) == ["tiny_step128.pt", "tiny_step64.pt"]
     gpt.load("cpu", tmp_path / "snaps" / "tiny_step64.pt")
+
+# ---------- head ablation ----------
+@with_options
+@torch.no_grad()
+def test_ablation_changes_output_then_goes_away(options):
+    model = tiny(**options).eval()
+    X = tokens()
+    before = model(X)
+    with Ablate(model, layer=1, head=2):
+        during = model(X)
+    after = model(X)
+    assert not torch.allclose(before, during)
+    assert torch.equal(before, after)                     # the hook is gone again
+    assert all(len(m._forward_pre_hooks) == 0 for m in model.modules())
+
+@pytest.mark.parametrize("layer, head", [(0, 0), (1, 1), (1, 2)])
+def test_ablation_zeroes_only_that_head(layer, head):
+    """A slice from len(x) (the batch size) would zero the wrong channels, or none."""
+    model = tiny()
+    hs = TINY["emb"] // TINY["heads"]
+    x = torch.randn(2, 5, TINY["emb"])
+    with Ablate(model, layer, head) as abl:
+        out = abl.zero_head(model.blocks[layer].attn.proj, (x,))
+    mine = slice(head * hs, (head + 1) * hs)
+    assert (out[..., mine] == 0).all()
+    others = torch.ones(TINY["emb"], dtype=torch.bool)
+    others[mine] = False
+    assert torch.equal(out[..., others], x[..., others])
+    assert not (x[..., mine] == 0).all()                  # x itself unchanged: the hook copies first
+
+@torch.no_grad()
+def test_ablating_every_head_leaves_only_the_bias():
+    model = tiny().eval()
+    proj = model.blocks[0].attn.proj
+    seen = []
+    handle = proj.register_forward_hook(lambda m, i, o: seen.append(o))
+    ablations = [Ablate(model, 0, h) for h in range(TINY["heads"])]
+    for a in ablations:
+        a.__enter__()
+    model(tokens())
+    for a in ablations:
+        a.__exit__()
+    handle.remove()
+    assert torch.allclose(seen[0], proj.bias.expand_as(seen[0]))
