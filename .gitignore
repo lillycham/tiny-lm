@@ -7,3 +7,4 @@ data/*.npy
 *.log
 .pytest_cache/
 data/*.parquet
+data/*.bin
