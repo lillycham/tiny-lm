@@ -84,6 +84,37 @@ class Recorder:
 
         return hook
 
+# ---------- head ablation ----------
+class Ablate:
+    """Hook that performs head ablation, wherein we switch off an attn head 
+    within the model while active to test how scores drop as a result.
+
+        with Ablate(model, layer=2, head=1):
+            scores = copy_scores(model, tok, UNSEEN)
+    """
+    def __init__(self, model, layer, head):
+        self.model = model
+        self.layer = layer
+        self.head = head
+
+        self.attn_handle = None
+        self.hs = None
+
+    def __enter__(self):
+        attn = self.model.blocks[self.layer].attn
+        self.attn_handle = attn.proj.register_forward_pre_hook(self.zero_head)
+        self.hs = attn.proj.in_features // attn.n_head
+
+        return self
+
+    def __exit__(self, *exc):
+        self.attn_handle.remove()
+
+    def zero_head(self, module, inputs):
+        x = inputs[0].clone()
+        x[:,:, self.head* self.hs:(self.head + 1) * self.hs] = 0
+        return x
+
 # ---------- scoring ----------
 @torch.no_grad()
 def logprob(model, tok, prompt, answer):
