@@ -77,7 +77,7 @@ def build_gpt(rng, args):
     if not gpt.CHECKPOINT.exists():
         sys.exit(f"No trained model at {gpt.CHECKPOINT}. Run python gpt.py first.")
     torch.manual_seed(args.seed)
-    device = args.device or "mps"
+    device = args.device or gpt.default_device()
     model = gpt.load(device)
     loss = gpt.val_loss(model, torch.tensor(val), device)
     return loss, lambda n, rng, start: gpt.generate(model, n, start, args.temperature)
@@ -90,7 +90,7 @@ def build_bpe(rng, args):
     if not bpe_gpt.CHECKPOINT.exists():
         sys.exit(f"No trained model at {bpe_gpt.CHECKPOINT}. Run python bpe_gpt.py first.")
     torch.manual_seed(args.seed)
-    device = args.device or "mps"
+    device = args.device or gpt.default_device()
     tok = bpe_gpt.BPE.load(bpe_gpt.TOKENISER)
     model = gpt.load(device, bpe_gpt.CHECKPOINT)
     loss = gpt.val_loss(model, torch.tensor(tok.encode(bpe_gpt.text[bpe_gpt.split:])), device)
@@ -105,7 +105,7 @@ def build_stories(rng, args):
     if not path.exists():
         sys.exit(f"No trained model at {path}. Run python stories_gpt.py first.")
     torch.manual_seed(args.seed)
-    device = args.device or "mps"
+    device = args.device or gpt.default_device()
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
     model = gpt.load(device, path)
     loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
@@ -121,7 +121,7 @@ def build_sft(rng, args):
     if not path.exists():
         sys.exit(f"No fine-tuned model at {path}. Run python sft.py first.")
     torch.manual_seed(args.seed)
-    device = args.device or "mps"
+    device = args.device or gpt.default_device()
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
     model = gpt.load(device, path)
     loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
@@ -143,7 +143,7 @@ def build_instruct(rng, args):
     if unknown:
         sys.exit(f"Unknown features {unknown}. Choose from {', '.join(instruct_sft.FEATURES)}.")
     torch.manual_seed(args.seed)
-    device = args.device or "mps"
+    device = args.device or gpt.default_device()
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
     model = gpt.load(device, path)
     loss = gpt.val_loss(model, stories_gpt.load_tokens("val"), device)
@@ -199,9 +199,9 @@ def main():
                              " for instruct, words separated by commas (default 'dragon, soup, happy')")
     parser.add_argument("--smoothing", type=float, default=1, help="counts: pseudo-count added to every pair (default 1)")
     parser.add_argument("--steps", type=int, help="training steps (default 5000 for sgd and attention, 60000 for mlp and torch)")
-    parser.add_argument("--device", choices=["cpu", "mps"],
+    parser.add_argument("--device", choices=["cpu", "mps", "cuda"],
                         help="torch: device to train on (default cpu, faster for this model); "
-                             "gpt, bpe, stories, sft and instruct: device to run on (default mps)")
+                             "gpt, bpe, stories, sft and instruct: device to run on (default: the fastest here)")
     parser.add_argument("--features", default="",
                         help="instruct: features the story should have, separated by commas, from Dialogue, Twist, "
                              "MoralValue, BadEnding, Foreshadowing and Conflict (default none)")

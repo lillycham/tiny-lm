@@ -266,3 +266,18 @@ def test_resume(device, tmp_path, capsys):
     assert resume.exists()
     run()                                                 # the second run carries on from the file
     assert "Carrying on from step" in capsys.readouterr().out
+
+def test_default_device():
+    device = gpt.default_device()
+    assert device in gpt.DEVICES
+    torch.zeros(1, device=device)                         # it really is there
+    assert device == DEVICES[-1]                          # and it is the fastest one here
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_device_option(device):
+    import argparse
+    parser = argparse.ArgumentParser()
+    gpt.add_device_option(parser)
+    assert parser.parse_args([]).device == gpt.default_device()
+    assert parser.parse_args(["--device", device]).device == device
+    gpt.synchronize(device)

@@ -57,7 +57,7 @@ def story(model, tok, start="Once upon a time", temperature=1.0, n=400):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
+    gpt.add_device_option(parser)
     parser.add_argument("--steps", type=int, default=7500, help="training steps (default 7500)")
     parser.add_argument("--lr", type=float, default=1e-3, help="peak learning rate (default 1e-3)")
     for name in ("emb", "heads", "layers"):

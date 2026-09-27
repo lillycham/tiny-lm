@@ -159,6 +159,29 @@ class GPT(nn.Module):
         return self.out(self.ln(self.blocks(self.drop(x))))
 
 # ---------- data ----------
+DEVICES = ["cpu", "mps", "cuda"]
+
+def default_device():
+    """The fastest device here: an NVIDIA GPU, then an Apple GPU, then the CPU."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+def add_device_option(parser):
+    """The same --device option for every script."""
+    parser.add_argument("--device", default=default_device(), choices=DEVICES,
+                        help=f"default {default_device()}, the fastest here")
+
+def synchronize(device):
+    """Wait until the GPU has finished. GPU work runs in the background, so a timer
+       stopped before this measures only how long it took to queue the work."""
+    if device == "mps":
+        torch.mps.synchronize()
+    elif device == "cuda":
+        torch.cuda.synchronize()
+
 def batch(ids, B, block, device):
     """B random chunks of `block` characters, and the same chunks shifted by one."""
     starts = torch.randint(0, len(ids) - block, (B, 1))
@@ -360,13 +383,12 @@ def check_speed(config, device):
     t = time.time()
     for _ in range(10):
         lm_loss(model, X, Y).backward()
-    if device == "mps":
-        torch.mps.synchronize()   # wait until the GPU has finished
+    synchronize(device)
     return (time.time() - t) / 10
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
+    add_device_option(parser)
     parser.add_argument("--steps", type=int, default=5000, help="training steps (default 5000)")
     for name, value in CONFIG.items():
         parser.add_argument(f"--{name}", type=type(value), default=value, help=f"default {value}")
@@ -377,8 +399,8 @@ if __name__ == "__main__":
 
     check_against_loop()
     check_param_groups()
-    print(f"\n2. Time for one training step: CPU {check_speed(config, 'cpu') * 1000:.0f} ms,"
-          f" MPS {check_speed(config, 'mps') * 1000:.0f} ms")
+    gpu = f", {args.device.upper()} {check_speed(config, args.device) * 1000:.0f} ms" if args.device != "cpu" else ""
+    print(f"\n2. Time for one training step: CPU {check_speed(config, 'cpu') * 1000:.0f} ms{gpu}")
 
     torch.manual_seed(0)
     model = GPT(**config).to(args.device)

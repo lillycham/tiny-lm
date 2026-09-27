@@ -40,7 +40,7 @@ def get_tokeniser(train_text):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
+    gpt.add_device_option(parser)
     parser.add_argument("--steps", type=int, default=5000, help="training steps (default 5000)")
     args = parser.parse_args()
 

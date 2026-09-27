@@ -126,7 +126,7 @@ def show_test(title, result):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
+    gpt.add_device_option(parser)
     parser.add_argument("--steps", type=int, default=600, help="fine-tuning steps (default 600)")
     parser.add_argument("--base", type=Path, default=stories_gpt.CHECKPOINT,
                         help=f"the model to fine-tune (default {stories_gpt.CHECKPOINT})")

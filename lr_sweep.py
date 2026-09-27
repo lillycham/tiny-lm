@@ -18,7 +18,7 @@ import stories_gpt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--device", default="mps", choices=["cpu", "mps"], help="default mps")
+    gpt.add_device_option(parser)
     parser.add_argument("--steps", type=int, default=500, help="steps per run (default 500)")
     parser.add_argument("--emb", type=int, default=384, help="width (default 384)")
     parser.add_argument("--layers", type=int, default=stories_gpt.CONFIG["layers"])

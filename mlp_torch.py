@@ -127,7 +127,7 @@ def autograd_check():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", default="cpu", choices=["cpu", "mps"],
+    parser.add_argument("--device", default="cpu", choices=["cpu", "mps", "cuda"],
                         help="cpu is faster for a model this small (default cpu)")
     args = parser.parse_args()
 
