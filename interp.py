@@ -141,6 +141,32 @@ def diff_scores(model, tok, prompts):
     return [logprob(model, tok, p, r) - logprob(model, tok, p, w)
              for p, r, w in prompts]
 
+def val_chunks(block, n=32, seed=0):
+    """n fixed chunks of validation text, and the same chunks shifted by one: (n, block) each.
+
+    Always the same chunks, so each ablation is compared with the base model on the same text.
+    """
+    ids = load_tokens("val")
+    g = torch.Generator().manual_seed(seed)
+    starts = torch.randint(0, len(ids) - block - 1, (n, 1), generator=g)
+    idx = (starts + torch.arange(block)).numpy()
+    return (torch.from_numpy(ids[idx].astype(np.int64)),
+            torch.from_numpy(ids[idx + 1].astype(np.int64)))
+
+@torch.no_grad()
+def val_scores(model, X, Y):
+    """For each chunk, minus its mean loss per token, in nats.
+
+    Minus, so the sign matches the other tests: a head that helps gives a negative
+    change when it is switched off. This is a test of the whole model on ordinary
+    text, so it shows which heads matter for everything, not only for one task.
+    """
+    x_pred = model(X)
+
+    loss = F.cross_entropy(x_pred.transpose(1, 2), Y, reduction="none")
+
+    return (-loss.mean(dim=-1)).tolist()
+
 def summary(scores):
     """ list[float] -> tuple[float, float]
     Given a list of scores, return a mean and std. error."""
@@ -299,10 +325,12 @@ if __name__ == "__main__":
 
     run_interp(model, tok, args.checkpoint)
 
+    X, Y = val_chunks(model.block)
     tests = {"copy known":  lambda m: copy_scores(m, tok, KNOWN),
              "copy unseen": lambda m: copy_scores(m, tok, UNSEEN),
              "pronoun":     lambda m: diff_scores(m, tok, pronoun_prompts()),
-             "ball":        lambda m: diff_scores(m, tok, ball_prompts())}
+             "ball":        lambda m: diff_scores(m, tok, ball_prompts()),
+             "val loss":    lambda m: val_scores(m, X, Y)}
 
     if args.ablate:
         run_ablation(model, tests)
