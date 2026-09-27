@@ -2,3 +2,4 @@
 torch>=2.13
 numpy>=2
 pytest
+pyarrow
