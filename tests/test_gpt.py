@@ -15,8 +15,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import gpt
-from interp import Ablate, Recorder
-from stories_gpt import fine_tuned_path
+from interp import Ablate, Recorder, ablation_table, val_chunks, val_scores
+from stories_gpt import TOKENS, fine_tuned_path
 
 TINY = dict(block=16, emb=12, heads=3, layers=2, dropout=0.0, vocab=50)
 OPTIONS = [dict(gelu=g, tied=t, smear=s) for g, t, s in itertools.product([False, True], repeat=3)]
@@ -214,3 +214,37 @@ def test_ablating_every_head_leaves_only_the_bias():
         a.__exit__()
     handle.remove()
     assert torch.allclose(seen[0], proj.bias.expand_as(seen[0]))
+
+# ---------- validation-loss test ----------
+has_val_tokens = pytest.mark.skipif(not Path(str(TOKENS).format(split="val")).exists(),
+                                    reason="needs the val tokens from word_bpe.py")
+
+@has_val_tokens
+def test_val_chunks():
+    X, Y = val_chunks(16, n=5)
+    assert X.shape == Y.shape == (5, 16) and X.dtype == torch.int64
+    assert torch.equal(X[:, 1:], Y[:, :-1])               # Y is X shifted by one
+    again, _ = val_chunks(16, n=5)
+    assert torch.equal(X, again)                          # the same chunks every call
+    assert not torch.equal(X, val_chunks(16, n=5, seed=1)[0])
+
+@torch.no_grad()
+def test_val_scores():
+    """-loss.mean(-1).tolist() negates a list; the mean without dim gives one number."""
+    model = tiny().eval()
+    X = tokens(B=4)
+    Y = torch.roll(X, -1, dims=1)
+    scores = val_scores(model, X, Y)
+    assert isinstance(scores, list) and len(scores) == 4
+    for i, s in enumerate(scores):                        # one chunk at a time
+        assert s == pytest.approx(-gpt.lm_loss(model, X[i:i + 1], Y[i:i + 1]).item(), abs=1e-5)
+    assert all(s < 0 for s in scores)                     # minus a loss: a head that helps makes it drop
+
+@torch.no_grad()
+def test_val_scores_in_ablation_table():
+    model = tiny().eval()
+    X = tokens(B=3)
+    Y = torch.roll(X, -1, dims=1)
+    tables = ablation_table(model, {"val loss": lambda m: val_scores(m, X, Y)})
+    assert tables["val loss"].shape == (TINY["layers"], TINY["heads"])
+    assert (tables["val loss"] != 0).any()
