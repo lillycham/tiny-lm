@@ -247,7 +247,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
             raise ValueError(f"{resume} is from a run with other settings. Delete it to start again.")
         model.load_state_dict(saved["weights"])
         opt.load_state_dict(saved["optimizer"])
-        torch.random.set_rng_state(saved["rng"])
+        torch.random.set_rng_state(saved["rng"].cpu())
         first = saved["step"]
         print(f"Carrying on from step {first} of {STEPS}, saved in {resume}", flush=True)
 
