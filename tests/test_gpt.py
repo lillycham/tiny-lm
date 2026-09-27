@@ -408,3 +408,48 @@ def test_scaled_init_is_off_by_default():
     plain = gpt.GPT(**DEEP)
     for layer in residual_writers(plain):                             # PyTorch's own init: much wider
         assert layer.weight.std().item() > 0.02
+
+# ---------- gradient accumulation ----------
+def fixed_batches(monkeypatch, X, Y):
+    """Make gpt.batch hand out the rows of X and Y in order, B at a time."""
+    rows = iter(range(0, len(X), 1))
+    def batch(ids, B, block, device):
+        take = [next(rows) for _ in range(B)]
+        return X[take], Y[take]
+    monkeypatch.setattr(gpt, "batch", batch)
+
+def one_step(monkeypatch, X, Y, B, accum):
+    fixed_batches(monkeypatch, X, Y)
+    model = tiny()
+    gpt.train_model(model, "cpu", STEPS=1, B=B, WARMUP=1, log_every=0, train_ids=X, val_ids=X, accum=accum)
+    return model
+
+def test_accumulation_matches_one_big_batch(monkeypatch):
+    """2 micro-batches of 2 must step like 1 batch of 4. Without dividing each loss
+       by accum, the step would be twice too big."""
+    X = tokens(B=4)
+    Y = X.roll(-1, dims=1)
+    big = one_step(monkeypatch, X, Y, B=4, accum=1)
+    small = one_step(monkeypatch, X, Y, B=2, accum=2)
+    for (name, p), q in zip(small.named_parameters(), big.parameters()):
+        assert torch.allclose(p, q, atol=1e-6), name
+
+def test_accumulation_logs_the_mean_loss(monkeypatch, capsys):
+    X = tokens(B=4)
+    Y = X.roll(-1, dims=1)
+    with torch.no_grad():
+        mean = gpt.lm_loss(tiny(), X, Y).item()             # the loss before the step, on all 4 rows
+    fixed_batches(monkeypatch, X, Y)
+    monkeypatch.setattr(gpt, "val_loss", lambda *a, **k: 0.0)
+    gpt.train_model(tiny(), "cpu", STEPS=1, B=2, WARMUP=1, log_every=1, train_ids=X, val_ids=X, accum=2)
+    logged = float(capsys.readouterr().out.split("train loss")[1].split()[0])
+    assert logged == pytest.approx(mean, abs=1e-4)
+
+def test_resume_refuses_another_accum(tmp_path):
+    ids = torch.randint(0, TINY["vocab"], (500,))
+    resume = tmp_path / "tiny.resume.pt"
+    gpt.train_model(tiny(), "cpu", STEPS=4, B=2, WARMUP=1, log_every=0, train_ids=ids, val_ids=ids,
+                    resume=resume, resume_minutes=0, accum=2)
+    with pytest.raises(ValueError):
+        gpt.train_model(tiny(), "cpu", STEPS=4, B=2, WARMUP=1, log_every=0, train_ids=ids, val_ids=ids,
+                        resume=resume, resume_minutes=0, accum=1)
