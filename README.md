@@ -11,17 +11,17 @@ and its docstring explains what changed and why.
 
 ## Part 1: Tiny Shakespeare
 
-| File              | Model                                                         | Val loss (nats/char) |
-|-------------------|---------------------------------------------------------------|---------------------:|
-| `bigram.py`       | Bigram table from counts, with add-one smoothing              |                 2.48 |
-| `bigram_sgd.py`   | The same table, learned with gradient descent                 |                 2.50 |
-| `mlp.py`          | MLP over 8 characters of context (Bengio et al., 2003), NumPy |                 1.72 |
-| `mlp_torch.py`    | The same MLP in PyTorch, with autograd                        |                 1.72 |
-| `attention.py`    | One causal self-attention head                                |                 2.34 |
-| `transformer.py`  | Multi-head attention, feed-forward, LayerNorm, residuals      |                 1.71 |
-| `gpt.py`          | Small GPT: batched heads, dropout, AdamW, MPS, checkpoints    |                 1.53 |
-| `bpe.py`          | Byte-pair encoding tokeniser, 512 tokens                      |                    — |
-| `bpe_gpt.py`      | The GPT, trained on BPE tokens                                |                 1.50 |
+| File                         | Model                                                         | Val loss (nats/char) |
+|------------------------------|---------------------------------------------------------------|---------------------:|
+| `shakespeare/bigram.py`      | Bigram table from counts, with add-one smoothing              |                 2.48 |
+| `shakespeare/bigram_sgd.py`  | The same table, learned with gradient descent                 |                 2.50 |
+| `shakespeare/mlp.py`         | MLP over 8 characters of context (Bengio et al., 2003), NumPy |                 1.72 |
+| `shakespeare/mlp_torch.py`   | The same MLP in PyTorch, with autograd                        |                 1.72 |
+| `core/attention.py`          | One causal self-attention head                                |                 2.34 |
+| `shakespeare/transformer.py` | Multi-head attention, feed-forward, LayerNorm, residuals      |                 1.71 |
+| `core/gpt.py`                | Small GPT: batched heads, dropout, AdamW, MPS, checkpoints    |                 1.53 |
+| `core/bpe.py`                | Byte-pair encoding tokeniser, 512 tokens                      |                    — |
+| `shakespeare/bpe_gpt.py`     | The GPT, trained on BPE tokens                                |                 1.50 |
 
 The BPE model predicts tokens, not characters. Its loss is converted to nats
 per character, so all the rows compare directly. The uniform guess over 65
@@ -29,15 +29,15 @@ characters is 4.17.
 
 ## Part 2: TinyStories
 
-| File              | What it does                                                            |
-|-------------------|-------------------------------------------------------------------------|
-| `word_bpe.py`     | Fast BPE: split into words first, GPT-2 style. 4,096 tokens, 3.95 characters per token. Encodes the 2.2 GB training file (553M tokens) in about 2 minutes |
-| `stories_gpt.py`  | The story model: GPT-2 shaped (GELU, tied embeddings), 256 tokens of context. Can resume after a crash |
-| `lr_sweep.py`     | Short runs to pick a learning rate before a long run                    |
-| `sft.py`          | Supervised fine-tuning: "Tell me a story about Lily." With loss masking |
-| `instruct_sft.py` | Fine-tuning on TinyStoriesInstruct: stories that must use given words   |
-| `interp.py`       | Hooks that record the residual stream and attention, tests for copying, pronouns and "who gets the ball", and an induction-head test |
-| `playground.py`   | A playground in the browser: stories token by token, two models side by side, token probabilities, and attention |
+| File                      | What it does                                                                                                                                              |
+|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `core/word_bpe.py`        | Fast BPE: split into words first, GPT-2 style. 4,096 tokens, 3.95 characters per token. Encodes the 2.2 GB training file (553M tokens) in about 2 minutes |
+| `stories/stories_gpt.py`  | The story model: GPT-2 shaped (GELU, tied embeddings), 256 tokens of context. Can resume after a crash                                                    |
+| `stories/lr_sweep.py`     | Short runs to pick a learning rate before a long run                                                                                                      |
+| `stories/sft.py`          | Supervised fine-tuning: "Tell me a story about Lily." With loss masking                                                                                   |
+| `stories/instruct_sft.py` | Fine-tuning on TinyStoriesInstruct: stories that must use given words                                                                                     |
+| `tools/interp.py`         | Hooks that record the residual stream and attention, tests for copying, pronouns and "who gets the ball", and an induction-head test                      |
+| `tools/playground.py`     | A playground in the browser: stories token by token, two models side by side, token probabilities, and attention                                          |
 
 | Model                   | Parameters | Tokens seen | Val loss (nats/token) | Time on an M-series Mac |
 |-------------------------|-----------:|------------:|----------------------:|------------------------:|
@@ -72,12 +72,12 @@ use the one that pretraining built.
 A GPT-2 small shaped model on general English from the web, trained on one
 rented RTX 5090.
 
-| File            | What it does                                                            |
-|-----------------|-------------------------------------------------------------------------|
-| `web_data.py`   | A 16,384-token tokeniser for FineWeb-Edu (4.20 characters per token), and parallel encoding of Parquet files into `uint16` token files, on every CPU core |
-| `web_gpt.py`    | The web model: 12 layers, width 768, 12 heads, 1,024 tokens of context, GPT-2's scaled init, gradient accumulation |
-| `anneal.py`     | A short last stage of training on SimpleStories mixed with web text, as the learning rate falls |
-| `chat_sft.py`   | Supervised fine-tuning on Dolly 15k: a general question-and-answer model |
+| File              | What it does                                                                                                                                              |
+|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `web/web_data.py` | A 16,384-token tokeniser for FineWeb-Edu (4.20 characters per token), and parallel encoding of Parquet files into `uint16` token files, on every CPU core |
+| `web/web_gpt.py`  | The web model: 12 layers, width 768, 12 heads, 1,024 tokens of context, GPT-2's scaled init, gradient accumulation                                        |
+| `web/anneal.py`   | A short last stage of training on SimpleStories mixed with web text, as the learning rate falls                                                           |
+| `web/chat_sft.py` | Supervised fine-tuning on Dolly 15k: a general question-and-answer model                                                                                  |
 
 `instruct_sft.py`, `interp.py` and the playground also work with the web models.
 
@@ -108,6 +108,20 @@ about 0.97. The text it writes is fluent, but most facts are invented.
   verse or one line as asked, and follows up across turns. But it invents
   facts, and doesn't yet take answers from a paragraph in its context.
 
+## Layout
+
+| Folder         | What's in it                                                              |
+|----------------|---------------------------------------------------------------------------|
+| `core/`        | Shared by all parts: the GPT, attention, Tiny Shakespeare, BPE tokenisers |
+| `shakespeare/` | Part 1: from a bigram table to a small GPT                                |
+| `stories/`     | Part 2: the story models and their fine-tuning                            |
+| `web/`         | Part 3: the web model, its anneal and fine-tuning                         |
+| `tools/`       | For every part: interpretability, the playground, text generation         |
+| `tests/`       | Tiny models on the CPU, a few seconds                                     |
+| `checkpoints/` | Trained models and tokenisers, one folder per part (not in git)           |
+| `logs/`        | Training logs, one folder per part (not in git)                           |
+| `data/`        | Tiny Shakespeare; the bigger datasets are downloaded (see below)          |
+
 ## Setup
 
 The flake gives a Python with NumPy and PyTorch:
@@ -128,7 +142,7 @@ URL=https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main
 curl -LO $URL/TinyStoriesV2-GPT4-train.txt       # 2.2 GB
 curl -LO $URL/TinyStoriesV2-GPT4-valid.txt       # 22 MB
 
-# For instruct_sft.py only. It uses the first 30 MB of the 2.7 GB training file.
+# For stories/instruct_sft.py only. It uses the first 30 MB of the 2.7 GB training file.
 URL=https://huggingface.co/datasets/roneneldan/TinyStoriesInstruct/resolve/main
 curl -LO $URL/TinyStories-Instruct-valid.txt     # 27 MB
 curl -L $URL/TinyStories-Instruct-train.txt | head -c 31457280 > TinyStories-Instruct-train-30MB.txt
@@ -136,40 +150,45 @@ curl -L $URL/TinyStories-Instruct-train.txt | head -c 31457280 > TinyStories-Ins
 
 ## Usage
 
-Run a step to check its parts and train its model:
+Run every step as a module, from the top folder of the repo:
 
 ```sh
-python gpt.py                    # Part 1: about 9 minutes on an M-series GPU
-python bpe_gpt.py                # about 10 minutes
+python -m core.gpt                  # Part 1: about 9 minutes on an M-series GPU
+python -m shakespeare.bpe_gpt       # about 10 minutes
 
-python word_bpe.py               # Part 2: train the tokeniser, save the tokens to data/
-python stories_gpt.py            # the 3.5M story model, about 45 minutes
-caffeinate -i python stories_gpt.py --emb 384 --steps 32000   # the 12M model, overnight
-python sft.py --base checkpoints/stories_gpt_384w6l.pt        # fine-tune the 12M model
-python interp.py --checkpoint checkpoints/stories_gpt_384w6l.pt
+python -m core.word_bpe             # Part 2: train the tokeniser, save the tokens to data/
+python -m stories.stories_gpt       # the 3.5M story model, about 45 minutes
+caffeinate -i python -m stories.stories_gpt --emb 384 --steps 32000     # the 12M model, overnight
+python -m stories.sft --base checkpoints/stories/stories_gpt_384w6l.pt  # fine-tune the 12M model
+python -m tools.interp --checkpoint checkpoints/stories/stories_gpt_384w6l.pt
+
+python -m web.web_data tokeniser    # Part 3: the web tokeniser, then encode (see its --help)
+python -m web.web_gpt --compile     # the 98M web model, on a rented GPU
+python -m web.chat_sft              # a question-and-answer model from it
 ```
 
-Generate text from any model with `main.py`:
+Generate text from the Part 1 and 2 models with `tools/main.py`:
 
 ```sh
-python main.py mlp --start "ROMEO:"
-python main.py gpt --temperature 0.8
-python main.py stories --checkpoint checkpoints/stories_gpt_384w6l.pt
-python main.py sft --start Hana --checkpoint checkpoints/stories_sft_384w6l.pt
-python main.py instruct --start "dragon, soup, happy" --features Dialogue
-python main.py tokens --start "Once upon a time, Tom's cat sat."
+python -m tools.main mlp --start "ROMEO:"
+python -m tools.main gpt --temperature 0.8
+python -m tools.main stories --checkpoint checkpoints/stories/stories_gpt_384w6l.pt
+python -m tools.main sft --start Hana --checkpoint checkpoints/stories/stories_sft_384w6l.pt
+python -m tools.main instruct --start "dragon, soup, happy" --features Dialogue
+python -m tools.main tokens --start "Once upon a time, Tom's cat sat."
 ```
 
-The trained models load their checkpoints from `checkpoints/`, so run the step
-that trains them first. Use `python main.py --help` for all options.
+The trained models load their checkpoints from `checkpoints/`, one folder per part, so run the step
+that trains them first. Use `python -m tools.main --help` for all options.
 
 Or try them in the browser:
 
 ```sh
-python playground.py             # then open http://localhost:8000
+python -m tools.playground             # then open http://localhost:8000
 ```
 
-Pick any story model or snapshot, and a story, name or instruct request. Tick
+Pick any story or web model or snapshot, and a story, name, instruct or chat
+request. The chat tab is a conversation, with an optional system prompt. Tick
 "Compare with" to run two models on the same request and seed. "Show tokens"
 colours each token by how unlikely it was; hover one for its probability and the
 model's other choices. Click a token to see where each head looked from it.
@@ -195,18 +214,19 @@ doesn't track the tokeniser or the token files, so copy them across. Replace
 git clone https://github.com/lillycham/tiny-lm.git && cd tiny-lm
 pip install -r requirements.txt
 pytest                  # tests that need the token files skip until they are there
+mkdir -p checkpoints/stories logs/stories
 
 # On the Mac: the tokeniser (47 KB) and the tokens (1.1 GB)
-rsync -avP checkpoints/stories_bpe.json HOST:tiny-lm/checkpoints/
+rsync -avP checkpoints/stories/stories_bpe.json HOST:tiny-lm/checkpoints/stories/
 rsync -avP data/tinystories_train.npy data/tinystories_val.npy HOST:tiny-lm/data/
 
 # On the rented machine: time 200 steps, then start the real run
-python stories_gpt.py --emb 384 --steps 200 --tag timing
-nohup python stories_gpt.py --emb 384 --steps 67500 --tag full --snapshots --compile > full.log 2>&1 &
+python -m stories.stories_gpt --emb 384 --steps 200 --tag timing
+nohup python -m stories.stories_gpt --emb 384 --steps 67500 --tag full --snapshots --compile > logs/stories/full.log 2>&1 &
 
 # On the Mac: get the model and its snapshots back
-rsync -avP HOST:tiny-lm/checkpoints/stories_gpt_384w6l_full.pt checkpoints/
-rsync -avP HOST:tiny-lm/checkpoints/snapshots/ checkpoints/snapshots/
+rsync -avP HOST:tiny-lm/checkpoints/stories/stories_gpt_384w6l_full.pt checkpoints/stories/
+rsync -avP HOST:tiny-lm/checkpoints/stories/snapshots/ checkpoints/stories/snapshots/
 ```
 
 67,500 steps of 32 × 256 tokens is one pass over the training set. `--compile`
