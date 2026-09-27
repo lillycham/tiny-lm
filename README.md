@@ -4,7 +4,7 @@ A small language model, built up step by step. Part 1 goes from a bigram table
 in NumPy to a GPT with a BPE tokeniser, on Tiny Shakespeare. Part 2 moves to
 TinyStories: a GPT-2 shaped story model, fine-tuning to follow requests, and
 interpretability tools to see what the model does inside. Everything trains on
-the Mac GPU (MPS).
+the Mac GPU (MPS), and on NVIDIA GPUs too.
 
 Each file is one step. Each file reuses the parts from the steps before it,
 and its docstring explains what changed and why.
@@ -126,6 +126,42 @@ Check the model code with the tests: tiny models on the CPU, a few seconds.
 ```sh
 pytest
 ```
+
+## Training on a rented GPU
+
+The scripts use the fastest device they find: an NVIDIA GPU (`cuda`), then an
+Apple GPU (`mps`), then the CPU. Use `--device` to choose one. Checkpoints
+load on any device, so a model trained on a rented GPU runs on the Mac.
+
+Push your commits first, because the rented machine clones from GitHub. Git
+doesn't track the tokeniser or the token files, so copy them across. Replace
+`HOST` with the machine's SSH address.
+
+```sh
+# On the rented machine
+git clone https://github.com/lillycham/tiny-lm.git && cd tiny-lm
+pip install -r requirements.txt
+pytest                  # tests that need the token files skip until they are there
+
+# On the Mac: the tokeniser (47 KB) and the tokens (1.1 GB)
+rsync -avP checkpoints/stories_bpe.json HOST:tiny-lm/checkpoints/
+rsync -avP data/tinystories_train.npy data/tinystories_val.npy HOST:tiny-lm/data/
+
+# On the rented machine: time 200 steps, then start the real run
+python stories_gpt.py --emb 384 --steps 200 --tag timing
+nohup python stories_gpt.py --emb 384 --steps 67500 --tag full --snapshots > full.log 2>&1 &
+
+# On the Mac: get the model and its snapshots back
+rsync -avP HOST:tiny-lm/checkpoints/stories_gpt_384w6l_full.pt checkpoints/
+rsync -avP HOST:tiny-lm/checkpoints/snapshots/ checkpoints/snapshots/
+```
+
+67,500 steps of 32 × 256 tokens is one pass over the training set. Always
+give a rented run a `--tag`: without one, `--emb 384` saves to
+`stories_gpt_384w6l.pt`, and the copy back replaces the 12M model on the Mac.
+The run saves a resume file every 30 minutes. If the machine stops, run the
+same command again to carry on. Keep the repo on a disk that outlives the
+machine, if the provider has one.
 
 ## References
 

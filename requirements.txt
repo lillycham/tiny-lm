@@ -1,0 +1,4 @@
+# For machines without Nix, such as a rented GPU. On the Mac, use the flake instead.
+torch>=2.13
+numpy>=2
+pytest
