@@ -248,3 +248,21 @@ def test_val_scores_in_ablation_table():
     tables = ablation_table(model, {"val loss": lambda m: val_scores(m, X, Y)})
     assert tables["val loss"].shape == (TINY["layers"], TINY["heads"])
     assert (tables["val loss"] != 0).any()
+
+# ---------- resuming ----------
+DEVICES = ["cpu"] + (["mps"] if torch.backends.mps.is_available() else []) \
+                  + (["cuda"] if torch.cuda.is_available() else [])
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_resume(device, tmp_path, capsys):
+    """torch.load(map_location=device) moved the saved RNG state to the GPU too, and
+       set_rng_state only takes a CPU tensor. Resuming failed on every GPU."""
+    ids = torch.randint(0, TINY["vocab"], (500,))
+    resume = tmp_path / "tiny.resume.pt"
+    def run():
+        gpt.train_model(tiny().to(device), device, STEPS=20, B=2, WARMUP=2, log_every=0,
+                        train_ids=ids, val_ids=ids, resume=resume, resume_minutes=0)
+    run()
+    assert resume.exists()
+    run()                                                 # the second run carries on from the file
+    assert "Carrying on from step" in capsys.readouterr().out
