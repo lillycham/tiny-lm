@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tiny-lm playground</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --border: #dedcd6;
+    --accent: #3b5bdb; --accent-text: #ffffff; --hot: #f08c00; --attn: #3b5bdb; --error: #c92a2a;
+    --req: #eef1fb; --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --panel: #1f1f23; --text: #ececee; --muted: #9a9aa2; --border: #34343a;
+      --accent: #7b93f5; --accent-text: #0f0f12; --hot: #ffa94d; --attn: #7b93f5; --error: #ff8787;
+      --req: #262a3a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px 0; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .device { color: var(--muted); font-size: 13px; }
+  main { padding: 12px 20px 40px; max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tabs button { border: 1px solid var(--border); background: transparent; color: var(--text);
+                 padding: 5px 14px; border-radius: 999px; cursor: pointer; font: inherit; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 10px; }
+  label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  select, input[type=text], input[type=number], textarea {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; }
+  select { max-width: 340px; }
+  input[type=number] { width: 80px; }
+  textarea { width: 100%; min-height: 70px; resize: vertical; }
+  .grow { flex: 1; min-width: 220px; }
+  .grow input { width: 100%; }
+  .features { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .features label { color: var(--text); font-size: 14px; }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  .btn { font: inherit; border-radius: 6px; padding: 6px 16px; cursor: pointer;
+         border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); }
+  .btn.ghost { background: transparent; color: var(--text); border-color: var(--border); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .hidden { display: none !important; }
+
+  #cards { display: grid; gap: 14px; margin-top: 14px; grid-template-columns: 1fr; }
+  #cards.two { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 800px) { #cards.two { grid-template-columns: 1fr; } }
+  .card { min-width: 0; }
+  .card-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; margin-bottom: 8px; }
+  .card-head .name { font-weight: 600; font-family: var(--mono); font-size: 13px; word-break: break-all; }
+  .card-head .meta, .card-head .status { color: var(--muted); font-size: 12px; }
+  .card-head .status { margin-left: auto; }
+  .error { color: var(--error); font-size: 13px; white-space: pre-wrap; }
+  .request { background: var(--req); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .tokens { white-space: pre-wrap; word-wrap: break-word; }
+  .tokens span { cursor: pointer; border-radius: 3px; }
+  .tokens span.prompt { color: var(--muted); }
+
+  /* Token view: every token boxed, and coloured by how unlikely it was. */
+  .tokens-view .tokens span { border: 1px solid var(--border); margin: 0 1px; padding: 0 1px;
+    font-family: var(--mono); font-size: 13px; line-height: 2;
+    background: color-mix(in oklab, var(--hot) calc(var(--u, 0) * 75%), transparent); }
+  .tokens-view .tokens span.prompt { border-style: dashed; background: transparent; }
+
+  /* Attention: colour by the chosen head's weight from the clicked token. */
+  .card.attn-on .tokens span { background: color-mix(in oklab, var(--attn) calc(var(--w, 0) * 90%), transparent); }
+  .card.attn-on .tokens span.from { outline: 2px solid var(--attn); outline-offset: 1px; }
+  .card.attn-on .tokens span.out { opacity: .35; }
+
+  .attn { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .attn-title { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
+  .attn-title .btn { padding: 2px 10px; font-size: 12px; margin-left: auto; }
+  .grid { display: grid; gap: 3px; font-family: var(--mono); font-size: 11px; overflow-x: auto; }
+  .grid .lab { color: var(--muted); display: flex; align-items: center; justify-content: center; }
+  .grid button { font: inherit; border: 1px solid var(--border); border-radius: 4px; padding: 2px 3px;
+    color: var(--text); cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden;
+    background: color-mix(in oklab, var(--attn) calc(var(--w, 0) * 60%), var(--panel)); min-width: 0; }
+  .grid button.on { outline: 2px solid var(--accent); }
+  .top-list { font-family: var(--mono); font-size: 12px; margin-top: 8px; color: var(--muted); }
+
+  #tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: 12px/1.5 var(--mono);
+    box-shadow: 0 4px 16px rgba(0,0,0,.18); min-width: 180px; }
+  #tip .bar { height: 4px; background: var(--hot); border-radius: 2px; margin-top: 1px; }
+  #tip .alt { display: grid; grid-template-columns: 1fr auto; gap: 0 10px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>tiny-lm playground</h1>
+  <span class="device" id="device"></span>
+</header>
+<main>
+  <div class="panel">
+    <div class="tabs" id="tabs">
+      <button data-mode="story" class="on">Story</button>
+      <button data-mode="name">Name SFT</button>
+      <button data-mode="instruct">Instruct</button>
+    </div>
+
+    <div class="row">
+      <label>Model <select id="modelA"></select></label>
+      <label><input type="checkbox" id="compare"> Compare with</label>
+      <label id="modelB-wrap" class="hidden"><select id="modelB"></select></label>
+    </div>
+
+    <div id="in-story">
+      <textarea id="text">Once upon a time,</textarea>
+      <div class="row" style="margin-top:6px">
+        <label><input type="checkbox" id="afterEot" checked> Start after &lt;|endoftext|&gt;, as stories did in training</label>
+      </div>
+    </div>
+    <div id="in-name" class="hidden row">
+      <label class="grow">Name <input type="text" id="name" value="Zork"></label>
+    </div>
+    <div id="in-instruct" class="hidden">
+      <div class="row"><label class="grow">Words <input type="text" id="words" value="dragon, soup, happy"></label></div>
+      <div class="features" id="features"></div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <label>Temperature <input type="range" id="temp" min="0" max="1.5" step="0.05" value="0.8">
+        <span id="tempVal">0.80</span></label>
+      <label>Max tokens <input type="number" id="maxTokens" value="300" min="1" max="1000"></label>
+      <label>Seed <input type="number" id="seed" value="0"></label>
+      <button class="btn ghost" id="dice" title="A random seed">Random seed</button>
+      <label><input type="checkbox" id="tokenView"> Show tokens</label>
+    </div>
+    <div class="actions">
+      <button class="btn" id="go">Generate</button>
+      <button class="btn ghost" id="stop" disabled>Stop</button>
+      <span class="hint">Cmd/Ctrl + Enter to generate. Hover a token for its probability; click one to see attention.</span>
+    </div>
+  </div>
+
+  <div id="cards"></div>
+</main>
+<div id="tip" class="hidden"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let models = [], mode = "story", running = [];
+const cardData = new Map();   // card element -> its tokens, ids and attention state
+const PREFER = {  // the model each tab starts on, best first
+  story: ["stories_gpt_384w6l_full.pt", "stories_gpt_384w6l.pt"],
+  name: ["stories_sft_384w6l_full.pt", "stories_sft_384w6l.pt"],
+  instruct: ["stories_instruct_384w6l_full_300mb.pt", "stories_instruct_384w6l_full.pt", "stories_instruct_384w6l.pt"],
+};
+
+// Whitespace made visible, for short labels.
+const vis = s => s.replace(/\n/g, "↵").replace(/ /g, "␣");
+const fmtParams = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : (n / 1e3).toFixed(0) + "k";
+
+async function init() {
+  const res = await (await fetch("/api/models")).json();
+  models = res.models;
+  $("device").textContent = `${models.length} models, on ${res.device}`;
+  $("features").innerHTML = res.features.map(f =>
+    `<label><input type="checkbox" value="${f}"> ${f}</label>`).join("");
+  for (const sel of [$("modelA"), $("modelB")]) {
+    for (const group of ["models", "snapshots"]) {
+      const items = models.filter(m => m.group === group);
+      if (!items.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = group;
+      for (const m of items) og.append(new Option(m.path, m.path));
+      sel.append(og);
+    }
+  }
+  setMode("story");
+}
+
+function pick(kind, not) {
+  const names = models.filter(m => m.group === "models").map(m => m.path);
+  for (const p of PREFER[kind]) if (names.includes(p) && p !== not) return p;
+  return (models.find(m => m.kind === kind && m.path !== not) || models[0] || {}).path;
+}
+
+function setMode(m) {
+  mode = m;
+  for (const b of $("tabs").children) b.classList.toggle("on", b.dataset.mode === m);
+  for (const k of ["story", "name", "instruct"]) $("in-" + k).classList.toggle("hidden", k !== m);
+  $("modelA").value = pick(m);
+  $("modelB").value = pick(m, $("modelA").value);
+}
+
+$("tabs").onclick = e => { if (e.target.dataset.mode) setMode(e.target.dataset.mode); };
+$("compare").onchange = () => $("modelB-wrap").classList.toggle("hidden", !$("compare").checked);
+$("temp").oninput = () => $("tempVal").textContent = (+$("temp").value).toFixed(2);
+$("dice").onclick = () => $("seed").value = Math.floor(Math.random() * 1e6);
+$("tokenView").onchange = () => {
+  document.body.classList.toggle("tokens-view", $("tokenView").checked);
+  for (const s of document.querySelectorAll(".tokens span")) showPiece(s);
+};
+$("go").onclick = generate;
+$("stop").onclick = () => running.forEach(c => c.abort());
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generate();
+  if (e.key === "Escape") document.querySelectorAll(".card").forEach(clearAttention);
+});
+
+// ---------- generating ----------
+function request() {
+  return {
+    mode, text: $("text").value, name: $("name").value, words: $("words").value,
+    features: [...$("features").querySelectorAll("input:checked")].map(i => i.value),
+    after_eot: mode === "story" ? $("afterEot").checked : false,
+    temperature: +$("temp").value, max_tokens: +$("maxTokens").value, seed: +$("seed").value,
+  };
+}
+
+function generate() {
+  if (running.length) return;
+  const names = [$("modelA").value];
+  if ($("compare").checked) names.push($("modelB").value);
+  const cards = $("cards");
+  cards.innerHTML = "";
+  cardData.clear();
+  cards.classList.toggle("two", names.length === 2);
+  const req = request();
+  for (const name of names) run(newCard(name), { ...req, model: name });
+}
+
+function newCard(model) {
+  const el = document.createElement("div");
+  el.className = "panel card";
+  el.innerHTML = `<div class="card-head"><span class="name"></span><span class="meta"></span>
+    <span class="status">starting…</span></div><div class="request hidden tokens"></div>
+    <div class="answer tokens"></div><div class="attn hidden"></div>`;
+  el.querySelector(".name").textContent = model;
+  $("cards").append(el);
+  const card = { el, model, ids: [], tokens: [], head: null };
+  cardData.set(el, card);
+  el.querySelector(".request").onclick = el.querySelector(".answer").onclick = e => clickToken(card, e);
+  return card;
+}
+
+async function run(card, req) {
+  const ctrl = new AbortController();
+  running.push(ctrl);
+  $("go").disabled = true; $("stop").disabled = false;
+  const status = card.el.querySelector(".status");
+  const t0 = performance.now();
+  let n = 0;
+  try {
+    const res = await fetch("/api/generate", { method: "POST", body: JSON.stringify(req), signal: ctrl.signal });
+    if (!res.ok) throw new Error((await res.json()).error);
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const msg = JSON.parse(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (msg.type === "start") {
+          card.el.querySelector(".meta").textContent = `${fmtParams(msg.params)} params, ${msg.shape}`;
+          const chat = req.mode !== "story";
+          card.el.querySelector(".request").classList.toggle("hidden", !chat);
+          msg.prompt_ids.forEach((id, i) => {
+            const piece = msg.prompt_pieces[i];
+            addToken(card, { id, piece, text: piece === "<|endoftext|>" ? "" : piece, prompt: true }, chat);
+          });
+        } else if (msg.type === "token") {
+          n++;
+          addToken(card, msg, false);
+          status.textContent = `${n} tokens, ${(n / ((performance.now() - t0) / 1000)).toFixed(0)}/s`;
+        } else if (msg.type === "end") {
+          status.textContent = `${msg.tokens} tokens in ${msg.seconds}s, ` +
+            (msg.reason === "eot" ? "ended the story" : "hit max tokens");
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name === "AbortError") status.textContent = `stopped after ${n} tokens`;
+    else { status.textContent = ""; card.el.insertAdjacentHTML("beforeend", `<div class="error"></div>`);
+           card.el.querySelector(".error").textContent = "Error: " + e.message; }
+  } finally {
+    running = running.filter(c => c !== ctrl);
+    if (!running.length) { $("go").disabled = false; $("stop").disabled = true; }
+  }
+}
+
+// One span per token. It holds both its piece (the token itself) and its text (the
+// characters it completes), and shows the one that fits the view.
+function addToken(card, t, inRequest) {
+  const s = document.createElement("span");
+  s.dataset.index = card.ids.length;
+  const eot = t.piece === "<|endoftext|>";
+  s.dataset.piece = eot ? "⟨eot⟩" : t.piece.replace(/\n/g, "↵\n");
+  s.dataset.text = eot ? "" : t.text;
+  if (t.prompt) s.className = "prompt";
+  else s.style.setProperty("--u", (1 - t.p).toFixed(3));
+  showPiece(s);
+  card.ids.push(t.id);
+  card.tokens.push(t);
+  card.el.querySelector(inRequest ? ".request" : ".answer").append(s);
+}
+function showPiece(s) { s.textContent = $("tokenView").checked ? s.dataset.piece : s.dataset.text; }
+
+// ---------- probability tooltip ----------
+const tip = $("tip");
+let tipFor = null;
+document.addEventListener("mousemove", e => {
+  const s = e.target.closest(".tokens span");
+  const card = s && s.closest(".card");
+  const t = card && cardData.get(card).tokens[+s.dataset.index];
+  if (!t || t.prompt) { tip.classList.add("hidden"); tipFor = null; return; }
+  if (s !== tipFor) fillTip(t);
+  tipFor = s;
+  tip.classList.remove("hidden");
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  const y = e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+});
+
+function fillTip(t) {
+  tip.innerHTML = `<div><b></b> p = ${t.p.toFixed(3)}</div><div class="alt"></div>`;
+  tip.querySelector("b").textContent = JSON.stringify(t.piece);
+  for (const [piece, q] of t.top) {
+    const name = document.createElement("div");
+    name.textContent = vis(piece);
+    const p = document.createElement("div");
+    p.textContent = q.toFixed(3);
+    const bar = document.createElement("div");
+    bar.className = "bar"; bar.style.width = (q * 100).toFixed(0) + "%";
+    name.append(bar);
+    tip.querySelector(".alt").append(name, p);
+  }
+}
+
+// ---------- attention ----------
+async function clickToken(card, e) {
+  const s = e.target.closest("span");
+  if (!s || running.length) return;
+  const t = +s.dataset.index;
+  const res = await fetch("/api/attention", { method: "POST",
+    body: JSON.stringify({ model: card.model, ids: card.ids, t }) });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  card.attn = { t, ...data };
+  const L = data.weights.length, H = data.weights[0].length;
+  if (!card.head || card.head[0] >= L || card.head[1] >= H) card.head = [L - 1, 0];
+  showAttention(card);
+}
+
+function topOf(card, w, k) {
+  return w.map((x, j) => [x, card.attn.offset + j]).sort((a, b) => b[0] - a[0]).slice(0, k);
+}
+
+function showAttention(card) {
+  const { t, offset, weights } = card.attn;
+  const [L, H] = card.head;
+  card.el.classList.add("attn-on");
+  for (const s of card.el.querySelectorAll(".tokens span")) {
+    const i = +s.dataset.index;
+    const inView = i >= offset && i <= t;
+    s.classList.toggle("from", i === t);
+    s.classList.toggle("out", !inView);
+    s.style.setProperty("--w", inView ? weights[L][H][i - offset] : 0);
+  }
+  const panel = card.el.querySelector(".attn");
+  panel.classList.remove("hidden");
+  const piece = card.tokens[t].piece;
+  panel.innerHTML = `<div class="attn-title"><b></b><span class="hint">Each cell: the token that head looks at most, and its weight.</span>
+    <button class="btn ghost">Clear (Esc)</button></div><div class="grid"></div><div class="top-list"></div>`;
+  panel.querySelector("b").textContent = `Attention from ${JSON.stringify(piece)} (token ${t}), layer ${L} head ${H}`;
+  panel.querySelector("button").onclick = () => clearAttention(card.el);
+  const grid = panel.querySelector(".grid");
+  grid.style.gridTemplateColumns = `auto repeat(${weights[0].length}, minmax(64px, 1fr))`;
+  grid.append(Object.assign(document.createElement("div"), { className: "lab" }));
+  weights[0].forEach((_, h) => grid.append(Object.assign(document.createElement("div"), { className: "lab", textContent: "H" + h })));
+  weights.forEach((row, l) => {
+    grid.append(Object.assign(document.createElement("div"), { className: "lab", textContent: "L" + l }));
+    row.forEach((w, h) => {
+      const [[x, j]] = topOf(card, w, 1);
+      const b = document.createElement("button");
+      b.textContent = `${vis(card.tokens[j].piece).slice(0, 7)} ${x.toFixed(2).slice(1)}`;
+      b.title = `layer ${l} head ${h}: ${JSON.stringify(card.tokens[j].piece)} at ${x.toFixed(3)}`;
+      b.style.setProperty("--w", x);
+      b.classList.toggle("on", l === L && h === H);
+      b.onclick = () => { card.head = [l, h]; showAttention(card); };
+      grid.append(b);
+    });
+  });
+  panel.querySelector(".top-list").textContent = "Top 5: " + topOf(card, weights[L][H], 5)
+    .map(([x, j]) => `${JSON.stringify(card.tokens[j].piece)} (token ${j}) ${x.toFixed(3)}`).join("   ");
+}
+
+function clearAttention(el) {
+  el.classList.remove("attn-on");
+  el.querySelector(".attn").classList.add("hidden");
+  for (const s of el.querySelectorAll(".tokens span")) s.classList.remove("from", "out");
+}
+
+init();
+</script>
+</body>
+</html>

@@ -37,6 +37,7 @@ characters is 4.17.
 | `sft.py`          | Supervised fine-tuning: "Tell me a story about Lily." With loss masking |
 | `instruct_sft.py` | Fine-tuning on TinyStoriesInstruct: stories that must use given words   |
 | `interp.py`       | Hooks that record the residual stream and attention, tests for copying, pronouns and "who gets the ball", and an induction-head test |
+| `playground.py`   | A playground in the browser: stories token by token, two models side by side, token probabilities, and attention |
 
 | Model                   | Parameters | Tokens seen | Val loss (nats/token) | Time on an M-series Mac |
 |-------------------------|-----------:|------------:|----------------------:|------------------------:|
@@ -120,6 +121,17 @@ python main.py tokens --start "Once upon a time, Tom's cat sat."
 
 The trained models load their checkpoints from `checkpoints/`, so run the step
 that trains them first. Use `python main.py --help` for all options.
+
+Or try them in the browser:
+
+```sh
+python playground.py             # then open http://localhost:8000
+```
+
+Pick any story model or snapshot, and a story, name or instruct request. Tick
+"Compare with" to run two models on the same request and seed. "Show tokens"
+colours each token by how unlikely it was; hover one for its probability and the
+model's other choices. Click a token to see where each head looked from it.
 
 Check the model code with the tests: tiny models on the CPU, a few seconds.
 
