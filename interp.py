@@ -212,6 +212,30 @@ def format_stderr(pair):
     given a tuple pair of (mean, se), return a formatted string {mean:+.2f} ± {se:.2f}"""
     return f"{pair[0]:+.2f} ± {pair[1]:.2f}"
 
+def print_table(title, table):
+    print(title)
+    print("          " + "".join(f"  head {h}" for h in range(table.shape[1])))
+    for i, row in enumerate(table):
+        print(f"   layer {i}" + "".join(f"  {s:6.2f}" for s in row.tolist()))
+
+def ablation_table(model, tests):
+    """For each test, the mean change in its score when each head is switched off.
+
+    tests maps a name to a function that takes a model and returns one score per prompt.
+    Returns {name: tensor (layers, heads)}. Negative means the head helps that test.
+    """
+    n_layer, n_head = len(model.blocks), model.blocks[0].attn.n_head
+    base = {name: run(model) for name, run in tests.items()}        # nothing switched off
+    tables = {name: torch.zeros(n_layer, n_head) for name in tests}
+    for layer in range(n_layer):
+        for head in range(n_head):
+            with Ablate(model, layer, head):
+                for name, run in tests.items():
+                    scores = run(model)
+                    diffs = [a - b for a, b in zip(scores, base[name])]
+                    tables[name][layer, head] = stats.mean(diffs)
+    return tables
+
 
 # ---------- checks ----------
 @torch.no_grad()
@@ -249,18 +273,24 @@ def run_interp(model, tok, path):
     first, repeat, scores = induction(model, common_tokens())
     print(f"\n3. Random common tokens: loss {first:.2f} on the first copy, {repeat:.2f} on the repeat")
     print("   (a model that copies gets the repeat almost right: a loss near 0)")
-    print("   Induction score of each head (attention to the token after the earlier copy):")
-    print("          " + "".join(f"  head {h}" for h in range(scores.shape[1])))
-    for i, row in enumerate(scores):
-        print(f"   layer {i}" + "".join(f"  {s:6.2f}" for s in row.tolist()))
+    print_table("   Induction score of each head (attention to the token after the earlier copy):", scores)
     layer, head = divmod(scores.argmax().item(), scores.shape[1])
     print(f"\n   The strongest, layer {layer} head {head}, on a story:")
     print("   " + show_head(model, tok, "Tom had a red ball. Tom gave the red", layer, head))
+
+def run_ablation(model, tests):
+    tables = ablation_table(model, tests)
+    for (name, table) in tables.items():
+        print(f"\n   Ablation, {name}: change when each head is switched off")
+        print_table(name, table)
+        layer, head = divmod(table.argmin().item(), table.shape[1])
+        print(f"   Most important: layer {layer} head {head} ({table[layer, head]:+.2f} nats when switched off)")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", type=Path, default=CHECKPOINT, help=f"default {CHECKPOINT}")
     parser.add_argument("--against", type=Path, default=None, help="default off")
+    parser.add_argument("--ablate", action="store_true", help="switch off each head in turn, and show how the scores change (slow)")
     args = parser.parse_args()
 
     torch.manual_seed(0)
@@ -269,7 +299,17 @@ if __name__ == "__main__":
 
     run_interp(model, tok, args.checkpoint)
 
+    tests = {"copy known":  lambda m: copy_scores(m, tok, KNOWN),
+             "copy unseen": lambda m: copy_scores(m, tok, UNSEEN),
+             "pronoun":     lambda m: diff_scores(m, tok, pronoun_prompts()),
+             "ball":        lambda m: diff_scores(m, tok, ball_prompts())}
+
+    if args.ablate:
+        run_ablation(model, tests)
+
     if args.against:
         model_against = gpt.load("cpu", args.against)
         run_interp(model_against, tok, args.against)
+        if args.ablate:
+            run_ablation(model_against, tests)
 
