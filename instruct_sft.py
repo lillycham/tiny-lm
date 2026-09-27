@@ -45,7 +45,7 @@ def output_path(base, tag=None):
 
 def tokeniser_for(base):
     """The web models have their own tokeniser; every other base uses the story one."""
-    return web_data.TOKENISER if base.name.startswith("web_gpt") else TOKENISER
+    return web_data.TOKENISER if "web_gpt" in base.name else TOKENISER
 
 # How each feature reads in a request: "..., with dialogue and a twist."
 FEATURES = {

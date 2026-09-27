@@ -57,8 +57,9 @@ def kind(path):
     return "story"
 
 def family(path):
-    """Which tokeniser a model uses: "web" for web_gpt_*, else "stories"."""
-    return "web" if Path(path).name.startswith("web_gpt") else "stories"
+    """Which tokeniser a model uses: "web" for web_gpt_* and models fine-tuned from one
+       (stories_instruct_web_gpt_*), else "stories"."""
+    return "web" if "web_gpt" in Path(path).name else "stories"
 
 def step_of(path):
     """stories_gpt_384w6l_step1024.pt -> 1024, so snapshots sort by step, not as text."""
@@ -271,6 +272,10 @@ class Handler(BaseHTTPRequestHandler):
             write({"type": "end", "reason": reason, "tokens": count, "seconds": round(time.time() - t, 2)})
         except (BrokenPipeError, ConnectionResetError):
             pass        # the page pressed Stop, or closed: stop making tokens
+        except Exception as e:
+            # The 200 and some tokens are already sent, so a new HTTP response can't
+            # follow. Say what went wrong as one more line of the stream.
+            write({"type": "error", "error": f"{type(e).__name__}: {e}"})
 
 def make_server(root=ROOT, device="cpu", port=8000, tokenisers=TOKENISERS):
     """tokenisers: {family: path}. A family whose tokeniser file is missing is left out."""

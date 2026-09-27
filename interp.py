@@ -320,7 +320,7 @@ if __name__ == "__main__":
     parser.add_argument("--ablate", action="store_true", help="switch off each head in turn, and show how the scores change (slow)")
     args = parser.parse_args()
 
-    if args.checkpoint.name.startswith("web_gpt"):
+    if "web_gpt" in args.checkpoint.name:        # also stories_instruct_web_gpt_*
         # The functions above read these module globals, so the web model gets its own
         # tokeniser, validation text and <|endoftext|> ID. (Not for --against a story model.)
         load_tokens, TOKENISER, EOT_ID = web_data.load_tokens, web_data.TOKENISER, web_data.EOT_ID

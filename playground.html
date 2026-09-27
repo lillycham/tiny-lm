@@ -329,6 +329,8 @@ async function run(card, req) {
           n++;
           addToken(card, msg, false);
           status.textContent = `${n} tokens, ${(n / ((performance.now() - t0) / 1000)).toFixed(0)}/s`;
+        } else if (msg.type === "error") {
+          throw new Error(msg.error);
         } else if (msg.type === "end") {
           status.textContent = `${msg.tokens} tokens in ${msg.seconds}s, ` +
             (msg.reason === "eot" ? (req.mode === "chat" ? "done" : "ended the story") : "hit max tokens");
