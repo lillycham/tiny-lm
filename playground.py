@@ -48,7 +48,7 @@ TOKENISERS = {"stories": word_bpe.TOKENISER, "web": web_data.TOKENISER}
 # ---------- models ----------
 def kind(path):
     """The kind of request a model was trained for, from its file name."""
-    if "_chat" in path.name:
+    if "_chat" in path.name or "_system" in path.name:     # chat_sft.py, system_sft.py
         return "chat"
     if path.name.startswith("stories_sft"):
         return "name"
