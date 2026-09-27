@@ -249,6 +249,7 @@ def test_val_scores():
     for i, s in enumerate(scores):                        # one chunk at a time
         assert s == pytest.approx(-gpt.lm_loss(model, X[i:i + 1], Y[i:i + 1]).item(), abs=1e-5)
     assert all(s < 0 for s in scores)                     # minus a loss: a head that helps makes it drop
+    assert val_scores(model, X, Y, B=3) == pytest.approx(scores, abs=1e-6)   # in batches: the same scores
 
 @torch.no_grad()
 def test_val_scores_in_ablation_table():
