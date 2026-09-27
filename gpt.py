@@ -310,23 +310,19 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     for step in range(first, STEPS):
         for group in opt.param_groups:
             group["lr"] = lr_at(step)
-        # TODO(Lilly): accum micro-batches instead of one batch. Replace the 4 lines below:
-        #   - opt.zero_grad() once, before the micro-batches.
-        #   - accum times: draw a batch, and in the autocast block, compute its loss and
-        #     divide it by accum. Then backward() on it, outside the autocast block.
-        #     The gradients add up in .grad, so dividing makes them the mean's gradient.
-        #   - Keep loss as the total of the divided losses (a float, with .item()), so the
-        #     log line below prints the mean over the micro-batches. Change loss.item()
-        #     there to loss, then.
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
-            loss = lm_loss(step_model, *batch(train_ids, B, model.block, device))
         opt.zero_grad()
-        loss.backward()
+        total = 0
+        for _ in range(accum):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
+                loss = lm_loss(step_model, *batch(train_ids, B, model.block, device)) / accum
+                total += loss.detach()
+            loss.backward()
+
         # Scale down very big gradients, so one unusual batch can't wreck the weights.
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         if log_every and (step + 1) % log_every == 0:
-            print(f"step {step + 1:5d}  train loss {loss.item():.4f}"
+            print(f"step {step + 1:5d}  train loss {float(total):.4f}"
                   f"  val loss {val_loss(model, val_ids, device, B=val_B):.4f}  ({time.time() - start:.0f}s)", flush=True)
         if snapshots and is_snapshot_step(step + 1):
             save(model, snapshots.with_name(f"{snapshots.name}_step{step + 1}.pt"))
