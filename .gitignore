@@ -9,3 +9,4 @@ data/*.npy
 data/*.parquet
 data/*.bin
 data/*.jsonl
+.DS_Store
