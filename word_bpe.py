@@ -82,7 +82,11 @@ def weighted_pair_counts(words):
 class WordBPE(BPE):
     def __init__(self, merges):
         super().__init__(merges)
-        self.vocab[EOT_ID] = EOT.encode()
+        # <|endoftext|> comes after the 256 bytes and the merges: EOT_ID (4,095) for the
+        # story tokeniser, 16,383 for the web one. Not always EOT_ID, or it would hide
+        # a real token of a bigger tokeniser.
+        self.eot_id = 256 + len(merges)
+        self.vocab[self.eot_id] = EOT.encode()
         self.cache = {}
 
     @classmethod
