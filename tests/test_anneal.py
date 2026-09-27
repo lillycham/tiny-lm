@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-import anneal
+from web import anneal
 
 @pytest.mark.parametrize("fraction", [0.5, 0.25])
 def test_mix(fraction):

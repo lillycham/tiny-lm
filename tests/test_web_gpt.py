@@ -2,8 +2,8 @@
 import pytest
 import torch
 
-import gpt
-import web_gpt as wg
+from core import gpt
+from web import web_gpt as wg
 
 def test_the_default_model_is_gpt2_small_sized():
     """GPT-2 small's blocks (85M), with our smaller vocabulary. Built on the meta device:
@@ -39,13 +39,15 @@ def test_train_model_passes_val_B(monkeypatch):
 
 def test_instruct_sft_picks_the_web_tokeniser():
     from pathlib import Path
-    import instruct_sft, web_data, word_bpe
-    assert instruct_sft.tokeniser_for(Path("checkpoints/web_gpt_768w12l_anneal.pt")) == web_data.TOKENISER
-    assert instruct_sft.tokeniser_for(Path("checkpoints/stories_gpt_384w6l.pt")) == word_bpe.TOKENISER
+    from stories import instruct_sft
+    from web import web_data
+    from core import word_bpe
+    assert instruct_sft.tokeniser_for(Path("checkpoints/web/web_gpt_768w12l_anneal.pt")) == web_data.TOKENISER
+    assert instruct_sft.tokeniser_for(Path("checkpoints/stories/stories_gpt_384w6l.pt")) == word_bpe.TOKENISER
 
 def test_sft_example_ends_with_the_tokenisers_own_end_of_text():
-    import sft
-    from word_bpe import WordBPE
+    from stories import sft
+    from core.word_bpe import WordBPE
     tok = WordBPE.train(["the cat sat on the mat and the dog ran"] * 5, 262)
     x, y = sft.make_example(tok, "User: hi\nAssistant: ", "the cat sat")
     answer = tok.encode("the cat sat")

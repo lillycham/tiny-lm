@@ -16,7 +16,7 @@ Identity examples teach whose name is whose: "You are X." or "The user is X.", t
 "Who are you?" or "Who am I?", answered from the right one, or "I don't know" when the
 system line names only the other. The test names never appear in training.
 
-    python system_sft.py            # ~10-15 min on the Mac, with the tests before and after
+    python -m web.system_sft            # ~10-15 min on the Mac, with the tests before and after
 """
 import argparse
 import random
@@ -30,14 +30,14 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-import chat_sft
-import gpt
-import sft
-from web_data import TOKENISER
-from word_bpe import WordBPE
+from web import chat_sft
+from core import gpt
+from stories import sft
+from web.web_data import TOKENISER
+from core.word_bpe import WordBPE
 
-BASE = Path("checkpoints/web_gpt_768w12l_anneal25.pt")
-BEFORE = Path("checkpoints/web_gpt_768w12l_anneal25_chat_s250.pt")   # the chat model, to compare with
+BASE = Path("checkpoints/web/web_gpt_768w12l_anneal25.pt")
+BEFORE = Path("checkpoints/web/web_gpt_768w12l_anneal25_chat_s250.pt")   # the chat model, to compare with
 
 # ---------- rules ----------
 def sentences(text):

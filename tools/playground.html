@@ -193,10 +193,10 @@ const $ = id => document.getElementById(id);
 let models = [], mode = "story", running = [];
 const cardData = new Map();   // card element -> its tokens, ids and attention state
 const PREFER = {  // the model each tab starts on, best first
-  story: ["stories_gpt_384w6l_full.pt", "stories_gpt_384w6l.pt"],
-  name: ["stories_sft_384w6l_full.pt", "stories_sft_384w6l.pt"],
-  instruct: ["stories_instruct_384w6l_full_300mb.pt", "stories_instruct_384w6l_full.pt", "stories_instruct_384w6l.pt"],
-  chat: ["web_gpt_768w12l_anneal25_system.pt", "web_gpt_768w12l_anneal25_chat_s250.pt", "web_gpt_768w12l_anneal25_chat.pt"],
+  story: ["stories/stories_gpt_384w6l_full.pt", "stories/stories_gpt_384w6l.pt"],
+  name: ["stories/stories_sft_384w6l_full.pt", "stories/stories_sft_384w6l.pt"],
+  instruct: ["stories/stories_instruct_384w6l_full_300mb.pt", "stories/stories_instruct_384w6l_full.pt", "stories/stories_instruct_384w6l.pt"],
+  chat: ["web/web_gpt_768w12l_anneal25_system.pt", "web/web_gpt_768w12l_anneal25_chat_s250.pt", "web/web_gpt_768w12l_anneal25_chat.pt"],
 };
 
 // Whitespace made visible, for short labels.

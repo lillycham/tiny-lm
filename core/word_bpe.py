@@ -15,7 +15,7 @@ changes make it fast:
 Each story also ends with a special token, <|endoftext|>, so the model can learn
 where stories end.
 
-    python word_bpe.py          # train the merges, then encode TinyStories to disk
+    python -m core.word_bpe          # train the merges, then encode TinyStories to disk
 """
 import json
 import re
@@ -25,14 +25,14 @@ from pathlib import Path
 
 import numpy as np
 
-from bpe import BPE, merge
+from core.bpe import BPE, merge
 
 VOCAB_SIZE = 4096                 # 256 bytes + 3839 merges + <|endoftext|>
 EOT = "<|endoftext|>"
 EOT_ID = VOCAB_SIZE - 1
 TRAIN_FILE = Path("data/TinyStoriesV2-GPT4-train.txt")
 VAL_FILE = Path("data/TinyStoriesV2-GPT4-valid.txt")
-TOKENISER = Path("checkpoints/stories_bpe.json")
+TOKENISER = Path("checkpoints/stories/stories_bpe.json")
 TOKENS = Path("data/tinystories_{split}.npy")   # token IDs, saved as 16-bit numbers
 
 # A word is an optional space and then letters, or numbers, or punctuation. Or it is

@@ -6,7 +6,7 @@ should bring the validation loss close to the count-based model's 2.48.
 """
 import numpy as np
 
-from data import V, train, val
+from core.data import V, train, val
 
 x_train, y_train = train[:-1], train[1:]
 x_val, y_val = val[:-1], val[1:]
@@ -60,7 +60,7 @@ def train_probs(rng, LR=50, STEPS=5000, BATCH=1024, log_every=500):
     return softmax(W)
 
 if __name__ == "__main__":
-    from bigram import count_probs
+    from shakespeare.bigram import count_probs
 
     learned_probs = train_probs(np.random.default_rng(0))
 

@@ -8,8 +8,8 @@ SimpleStories (Finke et al. 2025): ~2.1M short stories by GPT-4o-mini, with more
 topics, styles and names than TinyStories. Two of its 7 train files (~175M tokens) and
 its test file, encoded with the web tokeniser:
 
-    python anneal.py encode                  # data/simplestories_{train,val}.bin
-    python anneal.py --compile               # web_gpt_768w12l.pt -> web_gpt_768w12l_anneal.pt
+    python -m web.anneal encode                  # data/simplestories_{train,val}.bin
+    python -m web.anneal --compile               # web_gpt_768w12l.pt -> web_gpt_768w12l_anneal.pt
 
 The learning rate starts where the main run ended (6e-5, its LR / 10). AdamW's state
 isn't in the checkpoint, so it starts again: a short warm-up, then a cosine down.
@@ -23,11 +23,11 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 
-import gpt
-import web_data
-import web_gpt
-from web_data import TOKENISER
-from word_bpe import WordBPE
+from core import gpt
+from web import web_data
+from web import web_gpt
+from web.web_data import TOKENISER
+from core.word_bpe import WordBPE
 
 STORY_FILES = [Path(f"data/simplestories_train_{i:02d}.parquet") for i in range(2)]
 STORY_TEST = Path("data/simplestories_test.parquet")

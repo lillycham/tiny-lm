@@ -11,9 +11,9 @@ Then three small tests, scored with log-probabilities rather than right or wrong
 And the induction-head test: random tokens, repeated. A model that can copy
 predicts the repeat, and some head looks back at the token after the first copy.
 
-    python interp.py                                        # the base story model
-    python interp.py --checkpoint checkpoints/stories_sft.pt
-    python interp.py --checkpoint checkpoints/web_gpt_768w12l.pt   # web_gpt: its own tokeniser and data
+    python -m tools.interp                                        # the base story model
+    python -m tools.interp --checkpoint checkpoints/stories/stories_sft.pt
+    python -m tools.interp --checkpoint checkpoints/web/web_gpt_768w12l.pt   # web_gpt: its own tokeniser and data
 """
 import argparse
 import math
@@ -25,11 +25,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-import gpt
-import web_data
-from attention import attention
-from stories_gpt import CHECKPOINT, load_tokens
-from word_bpe import EOT_ID, TOKENISER, WordBPE
+from core import gpt
+from web import web_data
+from core.attention import attention
+from stories.stories_gpt import CHECKPOINT, load_tokens
+from core.word_bpe import EOT_ID, TOKENISER, WordBPE
 
 KNOWN = ["Lily", "Tom", "Ben", "Sue", "Max", "Mia", "Tim", "Anna", "Sam", "Lucy"]
 UNSEEN = ["Zork", "Priya", "Kofi", "Ingrid", "Mateo", "Yuki", "Bram", "Oona", "Tariq", "Wren"]

@@ -4,9 +4,9 @@ word_bpe.py did this for TinyStories. FineWeb-Edu is general English from the we
 filtered for educational pages: 10B tokens in 14 Parquet files. A Parquet file is
 split into row groups of about 1,000 documents; each one can be read on its own.
 
-    python web_data.py tokeniser                                  # ~5 min, from the sample file
-    python web_data.py encode val                                 # the validation split
-    python web_data.py encode train data/fineweb_edu_000.parquet  # and more files after it
+    python -m web.web_data tokeniser                                  # ~5 min, from the sample file
+    python -m web.web_data encode val                                 # the validation split
+    python -m web.web_data encode train data/fineweb_edu_000.parquet  # and more files after it
 
 The tokeniser: word_bpe.py's WordBPE with 16,384 tokens, not 4,096. On held-out
 FineWeb-Edu text that is 4.20 characters per token, against 4.57 for GPT-2's
@@ -28,11 +28,11 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 
-from word_bpe import WordBPE
+from core.word_bpe import WordBPE
 
 VOCAB_SIZE = 16384
 EOT_ID = VOCAB_SIZE - 1               # 256 bytes + 16,127 merges + <|endoftext|>
-TOKENISER = Path("checkpoints/web_bpe.json")
+TOKENISER = Path("checkpoints/web/web_bpe.json")
 TOKENS = Path("data/web_{split}.bin")
 SAMPLE = Path("data/fineweb_edu_013.parquet")    # the smallest of the 14 files, 541 MB
 VAL_GROUPS = 5                        # its first 5 row groups (~5,000 documents) are validation

@@ -13,7 +13,7 @@ all of its web loss, so it knows as much as the web model and writes better stor
 
     curl -L -o data/dolly-15k.jsonl \\
         https://huggingface.co/datasets/databricks/databricks-dolly-15k/resolve/main/databricks-dolly-15k.jsonl
-    python chat_sft.py                # a few minutes on the GPU
+    python -m web.chat_sft                # a few minutes on the GPU
 
 A 98M model will answer in the right form, but it will invent most facts.
 """
@@ -26,13 +26,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import gpt
-import sft
-from web_data import TOKENISER
-from word_bpe import WordBPE
+from core import gpt
+from stories import sft
+from web.web_data import TOKENISER
+from core.word_bpe import WordBPE
 
 DOLLY = Path("data/dolly-15k.jsonl")
-BASE = Path("checkpoints/web_gpt_768w12l_anneal25.pt")
+BASE = Path("checkpoints/web/web_gpt_768w12l_anneal25.pt")
 BLOCK = 512             # ~93% of the conversations fit
 QUESTIONS = ["What is the capital of France?", "Why is the sky blue?", "Give me three ideas for a rainy day.",
              "Write a short poem about the sea.", "What is photosynthesis?", "Who was Albert Einstein?"]

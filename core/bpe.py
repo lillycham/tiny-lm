@@ -12,13 +12,13 @@ words become one token, and rare words stay as smaller pieces, so any text still
 works. The same text becomes fewer tokens, so a model with the same context length
 sees more of it.
 
-    python bpe.py
+    python -m core.bpe
 """
 import json
 import time
 from collections import Counter
 
-from data import split, text
+from core.data import split, text
 
 VOCAB_SIZE = 512    # 256 bytes + 256 merges
 

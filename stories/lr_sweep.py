@@ -5,16 +5,16 @@ the same warm-up and cosine decay as a long run, only shorter. Then it compares
 the validation losses. Short runs tend to like slightly higher learning rates
 than long ones, so pick the best, or one step below it if two are close.
 
-    python lr_sweep.py                        # width 384, 500 steps, 4 learning rates
-    python lr_sweep.py --emb 192 --lrs 1e-3 3e-3
+    python -m stories.lr_sweep                        # width 384, 500 steps, 4 learning rates
+    python -m stories.lr_sweep --emb 192 --lrs 1e-3 3e-3
 """
 import argparse
 import time
 
 import torch
 
-import gpt
-import stories_gpt
+from core import gpt
+from stories import stories_gpt
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

@@ -14,7 +14,7 @@ For a batch of B sequences of T positions, each position a vector of size C:
     weights = causal softmax        (B, T, T)   row t: weights for s = 0..t, zero after t, sums to 1
     out     = weights @ v           (B, T, hs)  row t: weighted average of the values v[0..t]
 
-    python attention.py
+    python -m core.attention
 """
 import math
 import time
@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data import V, decode, encode, train, val
+from core.data import V, decode, encode, train, val
 
 # ---------- attention ----------
 def causal_weights(scores):

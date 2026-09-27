@@ -1,9 +1,9 @@
 """A playground in the browser for the story and web models: write, compare and look inside.
 
-    python playground.py                  # then open http://localhost:8000
-    python playground.py --port 8080 --device cpu
+    python -m tools.playground                  # then open http://localhost:8000
+    python -m tools.playground --port 8080 --device cpu
 
-- Write: a story from any model in checkpoints/, token by token as it is made.
+- Write: a story from any model in checkpoints/ (one folder per part), token by token as it is made.
   The web models (web_gpt_*, Part 3) use their own tokeniser; write the start of a text.
 - Compare: two models side by side, with the same request and the same seed.
 - Tokens: the text split into its tokens, coloured by how likely each one was.
@@ -31,14 +31,14 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-import chat_sft
-import gpt
-import instruct_sft
-import sft
-import web_data
-import word_bpe
-from interp import Recorder
-from word_bpe import EOT, WordBPE
+from web import chat_sft
+from core import gpt
+from stories import instruct_sft
+from stories import sft
+from web import web_data
+from core import word_bpe
+from tools.interp import Recorder
+from core.word_bpe import EOT, WordBPE
 
 ROOT = Path("checkpoints")
 PAGE = Path(__file__).parent / "playground.html"
@@ -67,13 +67,13 @@ def step_of(path):
     return int(m.group(1)) if m else -1
 
 def list_models(root=ROOT):
-    """Every story and web model in root, then the snapshots in root/snapshots. Not resume
-       files, and not the Shakespeare models, which use character tokens."""
-    def found(folder):
-        return [p for pattern in ("stories_*.pt", "web_gpt_*.pt") for p in folder.glob(pattern)
-                if not p.name.endswith(".resume.pt")]
-    models = sorted(found(root))
-    snaps = sorted(found(root / "snapshots"), key=lambda p: (p.name.split("_step")[0], step_of(p)))
+    """Every story and web model under root, then the snapshots (in any snapshots/ folder).
+       Not resume files, and not the Shakespeare models, which use character tokens."""
+    found = [p for pattern in ("stories_*.pt", "web_gpt_*.pt") for p in root.rglob(pattern)
+             if not p.name.endswith(".resume.pt")]
+    models = sorted(p for p in found if p.parent.name != "snapshots")
+    snaps = sorted((p for p in found if p.parent.name == "snapshots"),
+                   key=lambda p: (p.name.split("_step")[0], step_of(p)))
     return ([{"path": p.relative_to(root).as_posix(), "kind": kind(p), "family": family(p), "group": "models"}
              for p in models]
             + [{"path": p.relative_to(root).as_posix(), "kind": kind(p), "family": family(p), "group": "snapshots"}

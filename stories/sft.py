@@ -14,7 +14,7 @@ The one new idea is loss masking. The model must learn to write the answer, not
 to guess the user's request. So the targets for the user's tokens become -100,
 and F.cross_entropy skips every target of -100. The same goes for padding.
 
-    python sft.py          # about 5 minutes on the GPU, with the checks
+    python -m stories.sft          # about 5 minutes on the GPU, with the checks
 """
 import argparse
 import re
@@ -23,11 +23,11 @@ from pathlib import Path
 
 import torch
 
-import gpt
-import stories_gpt
-from word_bpe import EOT_ID, TOKENISER, TRAIN_FILE, WordBPE, stories
+from core import gpt
+from stories import stories_gpt
+from core.word_bpe import EOT_ID, TOKENISER, TRAIN_FILE, WordBPE, stories
 
-CHECKPOINT = Path("checkpoints/stories_sft.pt")
+CHECKPOINT = Path("checkpoints/stories/stories_sft.pt")
 BLOCK = stories_gpt.CONFIG["block"]
 IGNORE = -100                     # F.cross_entropy skips targets with this value
 NAMED = re.compile(r"\bnamed ([A-Z][a-z]+)")

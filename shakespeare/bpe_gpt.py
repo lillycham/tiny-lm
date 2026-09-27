@@ -8,8 +8,8 @@ The losses aren't directly comparable. The character model's loss is per
 character, and this model's loss is per token, which has about 2 characters to
 guess. To compare them, both become bits per character.
 
-    python bpe_gpt.py          # about 10 minutes on the GPU
-    python main.py bpe         # then generate from the saved model
+    python -m shakespeare.bpe_gpt          # about 10 minutes on the GPU
+    python -m tools.main bpe         # then generate from the saved model
 """
 import argparse
 import math
@@ -18,12 +18,12 @@ from pathlib import Path
 
 import torch
 
-import gpt
-from bpe import BPE, VOCAB_SIZE
-from data import split, text, val
+from core import gpt
+from core.bpe import BPE, VOCAB_SIZE
+from core.data import split, text, val
 
-TOKENISER = Path("checkpoints/bpe.json")
-CHECKPOINT = Path("checkpoints/gpt_bpe.pt")
+TOKENISER = Path("checkpoints/shakespeare/bpe.json")
+CHECKPOINT = Path("checkpoints/shakespeare/gpt_bpe.pt")
 
 def bits_per_char(loss, chars_per_token):
     """A loss in nats per token -> bits per character."""

@@ -4,7 +4,7 @@ A bigram model predicts the next character from the current character only.
 """
 import numpy as np
 
-from data import V, decode, stoi, train, val
+from core.data import V, decode, stoi, train, val
 
 # Each training example is a pair: (current character, next character).
 x_train, y_train = train[:-1], train[1:]

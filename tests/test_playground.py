@@ -13,12 +13,12 @@ import pytest
 import torch
 import torch.nn as nn
 
-import chat_sft
-import gpt
-import instruct_sft
-import playground as pg
-import sft
-from word_bpe import EOT_ID, TOKENISER, VOCAB_SIZE, WordBPE
+from web import chat_sft
+from core import gpt
+from stories import instruct_sft
+from tools import playground as pg
+from stories import sft
+from core.word_bpe import EOT_ID, TOKENISER, VOCAB_SIZE, WordBPE
 
 
 def tiny(**options):

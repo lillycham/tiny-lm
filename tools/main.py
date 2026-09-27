@@ -1,18 +1,18 @@
 """Generate Shakespeare-ish text from one of the models.
 
-    python main.py counts
-    python main.py sgd -n 1000 --seed 7
-    python main.py mlp --start "ROMEO:"
-    python main.py torch --device mps
-    python main.py attention --start "ROMEO:"
-    python main.py gpt --temperature 0.8     # after python gpt.py has saved a checkpoint
-    python main.py bpe -n 250                # after python bpe_gpt.py has saved a checkpoint
-    python main.py stories --temperature 0.8 # after python stories_gpt.py has saved a checkpoint
-    python main.py stories --checkpoint checkpoints/stories_gpt_384w6l.pt   # the 12M model
-    python main.py sft --start Priya         # a story about a name, after python sft.py
-    python main.py instruct --start "dragon, soup, happy" --features Dialogue,Twist
-                                             # a story with those words, after python instruct_sft.py
-    python main.py tokens --start "Once upon a time, Tom's cat sat."
+    python -m tools.main counts
+    python -m tools.main sgd -n 1000 --seed 7
+    python -m tools.main mlp --start "ROMEO:"
+    python -m tools.main torch --device mps
+    python -m tools.main attention --start "ROMEO:"
+    python -m tools.main gpt --temperature 0.8     # after python -m core.gpt has saved a checkpoint
+    python -m tools.main bpe -n 250                # after python -m shakespeare.bpe_gpt has saved a checkpoint
+    python -m tools.main stories --temperature 0.8 # after python -m stories.stories_gpt has saved a checkpoint
+    python -m tools.main stories --checkpoint checkpoints/stories/stories_gpt_384w6l.pt   # the 12M model
+    python -m tools.main sft --start Priya         # a story about a name, after python -m stories.sft
+    python -m tools.main instruct --start "dragon, soup, happy" --features Dialogue,Twist
+                                             # a story with those words, after python -m stories.instruct_sft
+    python -m tools.main tokens --start "Once upon a time, Tom's cat sat."
                                              # how the two BPE tokenisers split the text
 """
 import argparse
@@ -21,10 +21,10 @@ from pathlib import Path
 
 import numpy as np
 
-import bigram
-import bigram_sgd
-import mlp
-from data import stoi, train, val
+from shakespeare import bigram
+from shakespeare import bigram_sgd
+from shakespeare import mlp
+from core.data import stoi, train, val
 
 # Each model builder returns (validation loss, sample function).
 # sample(n, rng, start) generates n characters that follow the text `start`.
@@ -46,7 +46,7 @@ def build_mlp(rng, args):
 def build_torch(rng, args):
     # Import here, because torch takes a moment to load and the other models don't need it.
     import torch
-    import mlp_torch
+    from shakespeare import mlp_torch
 
     # PyTorch has its own random generator, so seed it from --seed.
     torch.manual_seed(args.seed)
@@ -60,7 +60,7 @@ def build_torch(rng, args):
 
 def build_attention(rng, args):
     import torch
-    import attention
+    from core import attention
 
     torch.manual_seed(args.seed)
     train_ids, val_ids = torch.tensor(train), torch.tensor(val)
@@ -71,11 +71,11 @@ def build_attention(rng, args):
 
 def build_gpt(rng, args):
     import torch
-    import gpt
+    from core import gpt
 
     # Training takes minutes, so gpt.py trains once and saves the model; this only loads it.
     if not gpt.CHECKPOINT.exists():
-        sys.exit(f"No trained model at {gpt.CHECKPOINT}. Run python gpt.py first.")
+        sys.exit(f"No trained model at {gpt.CHECKPOINT}. Run python -m core.gpt first.")
     torch.manual_seed(args.seed)
     device = args.device or gpt.default_device()
     model = gpt.load(device)
@@ -84,11 +84,11 @@ def build_gpt(rng, args):
 
 def build_bpe(rng, args):
     import torch
-    import bpe_gpt
-    import gpt
+    from shakespeare import bpe_gpt
+    from core import gpt
 
     if not bpe_gpt.CHECKPOINT.exists():
-        sys.exit(f"No trained model at {bpe_gpt.CHECKPOINT}. Run python bpe_gpt.py first.")
+        sys.exit(f"No trained model at {bpe_gpt.CHECKPOINT}. Run python -m shakespeare.bpe_gpt first.")
     torch.manual_seed(args.seed)
     device = args.device or gpt.default_device()
     tok = bpe_gpt.BPE.load(bpe_gpt.TOKENISER)
@@ -98,12 +98,12 @@ def build_bpe(rng, args):
 
 def build_stories(rng, args):
     import torch
-    import gpt
-    import stories_gpt
+    from core import gpt
+    from stories import stories_gpt
 
     path = args.checkpoint or stories_gpt.CHECKPOINT
     if not path.exists():
-        sys.exit(f"No trained model at {path}. Run python stories_gpt.py first.")
+        sys.exit(f"No trained model at {path}. Run python -m stories.stories_gpt first.")
     torch.manual_seed(args.seed)
     device = args.device or gpt.default_device()
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
@@ -113,13 +113,13 @@ def build_stories(rng, args):
 
 def build_sft(rng, args):
     import torch
-    import gpt
-    import sft
-    import stories_gpt
+    from core import gpt
+    from stories import sft
+    from stories import stories_gpt
 
     path = args.checkpoint or sft.CHECKPOINT
     if not path.exists():
-        sys.exit(f"No fine-tuned model at {path}. Run python sft.py first.")
+        sys.exit(f"No fine-tuned model at {path}. Run python -m stories.sft first.")
     torch.manual_seed(args.seed)
     device = args.device or gpt.default_device()
     tok = stories_gpt.WordBPE.load(stories_gpt.TOKENISER)
@@ -131,13 +131,13 @@ def build_sft(rng, args):
 
 def build_instruct(rng, args):
     import torch
-    import gpt
-    import instruct_sft
-    import stories_gpt
+    from core import gpt
+    from stories import instruct_sft
+    from stories import stories_gpt
 
     path = args.checkpoint or instruct_sft.CHECKPOINT
     if not path.exists():
-        sys.exit(f"No fine-tuned model at {path}. Run python instruct_sft.py first.")
+        sys.exit(f"No fine-tuned model at {path}. Run python -m stories.instruct_sft first.")
     features = [f.strip() for f in args.features.split(",") if f.strip()]
     unknown = [f for f in features if f not in instruct_sft.FEATURES]
     if unknown:
@@ -161,8 +161,8 @@ MODELS = {"counts": build_counts, "sgd": build_sgd, "mlp": build_mlp, "torch": b
 
 def show_tokens(text):
     """Print how each saved BPE tokeniser splits text, with | between the tokens."""
-    import bpe_gpt
-    import word_bpe
+    from shakespeare import bpe_gpt
+    from core import word_bpe
 
     tokenisers = [("Shakespeare BPE (bpe.py)", bpe_gpt.TOKENISER, bpe_gpt.BPE),
                   ("TinyStories BPE (word_bpe.py)", word_bpe.TOKENISER, word_bpe.WordBPE)]
@@ -206,7 +206,7 @@ def main():
                         help="instruct: features the story should have, separated by commas, from Dialogue, Twist, "
                              "MoralValue, BadEnding, Foreshadowing and Conflict (default none)")
     parser.add_argument("--checkpoint", type=Path,
-                        help="stories, sft and instruct: the model to load (default checkpoints/stories_gpt.pt,"
+                        help="stories, sft and instruct: the model to load (default checkpoints/stories/stories_gpt.pt,"
                              " stories_sft.pt or stories_instruct.pt; the 12M models end in _384w6l.pt)")
     parser.add_argument("--temperature", type=float, default=1.0,
                         help="gpt, bpe, stories, sft and instruct: below 1 gives safer, more repetitive text; above 1 more random (default 1)")

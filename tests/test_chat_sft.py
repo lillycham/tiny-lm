@@ -1,7 +1,7 @@
 """chat_sft.py: the Dolly prompt format, the split and the examples."""
-import chat_sft
-import sft
-from word_bpe import WordBPE
+from web import chat_sft
+from stories import sft
+from core.word_bpe import WordBPE
 
 ROWS = [{"instruction": f"Question {i}?", "context": "Some text." if i % 2 else "", "response": f" Answer {i}. "}
         for i in range(20)]
@@ -32,7 +32,7 @@ def test_too_long_conversations_are_dropped():
 def test_fine_tune_with_accumulation_learns():
     """accum splits each step into micro-batches; a tiny model still learns one example."""
     import torch
-    import gpt
+    from core import gpt
     torch.manual_seed(0)
     model = gpt.GPT(block=16, emb=32, heads=2, layers=1, dropout=0.0, vocab=20, gelu=True, tied=True)
     x = torch.arange(16).remainder(20)[None].repeat(4, 1)

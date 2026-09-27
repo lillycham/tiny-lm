@@ -7,9 +7,9 @@ What changes from transformer.py:
   - Training on the GPU (MPS), with a saved checkpoint, so main.py can load the
     trained model without training it again.
 
-    python gpt.py                  # checks, then train on the GPU and save checkpoints/gpt.pt
-    python gpt.py --block 128 --layers 4
-    python gpt.py --help           # all the sizes you can change
+    python -m core.gpt                  # checks, then train on the GPU and save checkpoints/shakespeare/gpt.pt
+    python -m core.gpt --block 128 --layers 4
+    python -m core.gpt --help           # all the sizes you can change
 """
 import argparse
 import math
@@ -24,8 +24,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from attention import attention
-from data import V, decode, encode, train, val
+from core.attention import attention
+from core.data import V, decode, encode, train, val
 
 # The default sizes. A checkpoint saves the sizes it was trained with.
 CONFIG = dict(
@@ -36,7 +36,7 @@ CONFIG = dict(
     dropout=0.2,    # fraction of values set to zero during training
 )
 
-CHECKPOINT = Path("checkpoints/gpt.pt")
+CHECKPOINT = Path("checkpoints/shakespeare/gpt.pt")
 
 # ---------- the model ----------
 class CausalSelfAttention(nn.Module):
@@ -266,7 +266,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     optimizer's state (Adam's m and v for every weight), the step, and the random
     number generator, so the batches after a restart are the ones there would have been.
 
-    With snapshots, a path like checkpoints/snapshots/stories_gpt: also save the model
+    With snapshots, a path like checkpoints/stories/snapshots/stories_gpt: also save the model
     at steps 64, 128, 256, ... as stories_gpt_step64.pt and so on, to see how it changes.
 
     val_B is the batch size for the val loss. Lower it for long contexts and big
@@ -381,7 +381,7 @@ def check_param_groups():
 
 def check_against_loop():
     """Copy the weights of transformer.py's MultiHeadAttention and compare the outputs."""
-    from transformer import MultiHeadAttention
+    from shakespeare.transformer import MultiHeadAttention
 
     torch.manual_seed(0)
     C, n_head = 64, 4

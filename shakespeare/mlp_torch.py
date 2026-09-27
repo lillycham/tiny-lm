@@ -4,8 +4,8 @@ Same model as mlp.py: 8 characters of context -> embeddings -> tanh layer -> log
 The difference is that autograd writes grads() for us: we only write the forward
 pass, and loss.backward() computes every gradient.
 
-    python mlp_torch.py            # autograd check against mlp.py, then training
-    python mlp_torch.py --device mps
+    python -m shakespeare.mlp_torch            # autograd check against mlp.py, then training
+    python -m shakespeare.mlp_torch --device mps
 """
 import argparse
 import time
@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data import V, decode, stoi, train, val
+from core.data import V, decode, stoi, train, val
 
 BLOCK, EMB, HIDDEN = 8, 16, 300
 
@@ -100,7 +100,7 @@ def generate(model, n, start="\n"):
 # ---------- autograd vs. your grads() ----------
 def autograd_check():
     """Copy mlp.py's parameters into the PyTorch model and compare the gradients."""
-    import mlp
+    from shakespeare import mlp
 
     model = MLP().double()   # float64, like NumPy, so the numbers can match closely
     with torch.no_grad():

@@ -7,20 +7,20 @@ Shakespeare was 511k tokens, so the models there saw each token about 40 times a
 overfit. TinyStories has 553M tokens, and this run sees only 61M of them, each one
 once. So there's no overfitting, and no need for dropout.
 
-    python word_bpe.py            # first, to make the tokens
-    python stories_gpt.py         # about 30 minutes on the GPU
+    python -m core.word_bpe            # first, to make the tokens
+    python -m stories.stories_gpt         # about 30 minutes on the GPU
 
 A bigger model overnight, which can carry on after a crash or a restart:
 
-    caffeinate -i python stories_gpt.py --emb 384 --steps 32000
-    python main.py stories        # then write stories with the saved model
+    caffeinate -i python -m stories.stories_gpt --emb 384 --steps 32000
+    python -m tools.main stories        # then write stories with the saved model
 
 The smeared-key test: the default size with the current code, then with --smear.
 --tag gives the control run its own name, so it doesn't replace stories_gpt.pt.
 
-    python stories_gpt.py --tag control     # checkpoints/stories_gpt_192w6l_control.pt
-    python stories_gpt.py --smear           # checkpoints/stories_gpt_192w6l_smear.pt
-    python stories_gpt.py --smear --seed 1  # checkpoints/stories_gpt_192w6l_smear_seed1.pt
+    python -m stories.stories_gpt --tag control     # checkpoints/stories/stories_gpt_192w6l_control.pt
+    python -m stories.stories_gpt --smear           # checkpoints/stories/stories_gpt_192w6l_smear.pt
+    python -m stories.stories_gpt --smear --seed 1  # checkpoints/stories/stories_gpt_192w6l_smear_seed1.pt
 """
 import argparse
 import math
@@ -30,11 +30,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import gpt
-from word_bpe import EOT_ID, TOKENISER, TOKENS, VOCAB_SIZE, WordBPE
+from core import gpt
+from core.word_bpe import EOT_ID, TOKENISER, TOKENS, VOCAB_SIZE, WordBPE
 
 CONFIG = dict(block=256, emb=192, heads=6, layers=6, dropout=0.0, vocab=VOCAB_SIZE, gelu=True, tied=True)
-CHECKPOINT = Path("checkpoints/stories_gpt.pt")
+CHECKPOINT = Path("checkpoints/stories/stories_gpt.pt")
 B = 32
 
 def fine_tuned_path(path, base):
@@ -65,7 +65,7 @@ if __name__ == "__main__":
     parser.add_argument("--smear", action="store_true", help="smeared keys (not GPT-2 compatible)")
     parser.add_argument("--tag", help="a label for the checkpoint name, e.g. control")
     parser.add_argument("--snapshots", action="store_true",
-                        help="also save the model at steps 64, 128, 256, ... in checkpoints/snapshots/")
+                        help="also save the model at steps 64, 128, 256, ... in checkpoints/stories/snapshots/")
     parser.add_argument("--compile", action="store_true",
                         help="train through torch.compile: faster on CUDA, not for MPS (default off)")
     parser.add_argument("--seed", type=int, default=0,

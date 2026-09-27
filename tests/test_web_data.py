@@ -8,8 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import web_data as wd
-from word_bpe import WordBPE
+from web import web_data as wd
+from core.word_bpe import WordBPE
 
 DOCS = ["The cat sat on the mat.", "Water boils at 100 °C.", "Photosynthesis makes sugar.",
         "Rivers carry water to the sea.", "“Quotes” and dashes — too.", "The end."]

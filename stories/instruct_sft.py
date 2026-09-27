@@ -12,12 +12,12 @@ keep the stories that have Words: and come after their fields, and turn Words: a
 Features: into the request. The model starts from the base story model, not from
 sft.py's model, so the before and after are a clean comparison.
 
-    python instruct_sft.py     # about 8 minutes on the GPU, with the checks
-    python instruct_sft.py --train-file data/TinyStories-Instruct-train-300MB.txt --steps 6000 --tag 300mb
-    python main.py instruct --start "dragon, soup, happy"
+    python -m stories.instruct_sft     # about 8 minutes on the GPU, with the checks
+    python -m stories.instruct_sft --train-file data/TinyStories-Instruct-train-300MB.txt --steps 6000 --tag 300mb
+    python -m tools.main instruct --start "dragon, soup, happy"
 
 The web model (web_gpt_*, Part 3) works too, with its own tokeniser:
-    python instruct_sft.py --base checkpoints/web_gpt_768w12l_anneal.pt \
+    python -m stories.instruct_sft --base checkpoints/web/web_gpt_768w12l_anneal.pt \
         --train-file data/TinyStories-Instruct-train-300MB.txt --steps 2000 --lr 1e-4 --tag 300mb
 """
 import argparse
@@ -28,19 +28,21 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import gpt
-import sft
-import stories_gpt
-import web_data
-from word_bpe import EOT, TOKENISER, WordBPE
+from core import gpt
+from stories import sft
+from stories import stories_gpt
+from web import web_data
+from core.word_bpe import EOT, TOKENISER, WordBPE
 
 TRAIN_FILE = Path("data/TinyStories-Instruct-train-30MB.txt")   # the first 30 MB of the 2.7 GB file
 VAL_FILE = Path("data/TinyStories-Instruct-valid.txt")
-CHECKPOINT = Path("checkpoints/stories_instruct.pt")
+CHECKPOINT = Path("checkpoints/stories/stories_instruct.pt")
 
 def output_path(base, tag=None):
-    """Where to save: stories_instruct.pt with base's sizes added, then _tag if given."""
+    """Where to save: stories_instruct.pt with base's sizes added, then _tag if given,
+    in base's folder (checkpoints/web/ for a web base)."""
     out = stories_gpt.fine_tuned_path(CHECKPOINT, base)
+    out = base.parent / out.name
     return out.with_name(f"{out.stem}_{tag}.pt") if tag else out
 
 def tokeniser_for(base):

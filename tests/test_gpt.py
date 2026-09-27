@@ -15,11 +15,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import gpt
-from interp import Ablate, Recorder, ablation_table, val_chunks, val_scores
-import instruct_sft
-from instruct_sft import output_path as instruct_path
-from stories_gpt import TOKENS, fine_tuned_path
+from core import gpt
+from tools.interp import Ablate, Recorder, ablation_table, val_chunks, val_scores
+from stories import instruct_sft
+from stories.instruct_sft import output_path as instruct_path
+from stories.stories_gpt import TOKENS, fine_tuned_path
 
 TINY = dict(block=16, emb=12, heads=3, layers=2, dropout=0.0, vocab=50)
 OPTIONS = [dict(gelu=g, tied=t, smear=s, scaled_init=i) for g, t, s, i in itertools.product([False, True], repeat=4)]
@@ -145,18 +145,18 @@ def test_batch_from_numpy_and_torch():
 
 def test_instruct_output_path():
     """A bigger run once had no tag, so it would have replaced the default run's model."""
-    assert instruct_path(Path("checkpoints/stories_gpt.pt")).name == "stories_instruct.pt"
-    full = Path("checkpoints/stories_gpt_384w6l_full.pt")
+    assert instruct_path(Path("checkpoints/stories/stories_gpt.pt")).name == "stories_instruct.pt"
+    full = Path("checkpoints/stories/stories_gpt_384w6l_full.pt")
     assert instruct_path(full).name == "stories_instruct_384w6l_full.pt"
     assert instruct_path(full, "300mb").name == "stories_instruct_384w6l_full_300mb.pt"
 
 def test_fine_tuned_path():
-    sft = Path("checkpoints/stories_sft.pt")
-    assert fine_tuned_path(sft, Path("checkpoints/stories_gpt.pt")) == sft
-    assert fine_tuned_path(sft, Path("checkpoints/stories_gpt_384w6l.pt")).name == "stories_sft_384w6l.pt"
+    sft = Path("checkpoints/stories/stories_sft.pt")
+    assert fine_tuned_path(sft, Path("checkpoints/stories/stories_gpt.pt")) == sft
+    assert fine_tuned_path(sft, Path("checkpoints/stories/stories_gpt_384w6l.pt")).name == "stories_sft_384w6l.pt"
 
 # ---------- the real checkpoints ----------
-@pytest.mark.parametrize("path", sorted(p for p in CHECKPOINTS.glob("*.pt") if not p.name.endswith(".resume.pt")),
+@pytest.mark.parametrize("path", sorted(p for p in CHECKPOINTS.glob("*/*.pt") if not p.name.endswith(".resume.pt")),
                          ids=lambda p: p.name)
 def test_checkpoint_loads(path):
     """New options once gave every model a parameter that old checkpoints don't have."""
@@ -336,12 +336,12 @@ def test_trains_on_shakespeare_by_default():
     gpt.train_model(model, "cpu", STEPS=3, B=2, WARMUP=1, log_every=0)
 
 # ---------- SFT data ----------
-@pytest.mark.skipif(not instruct_sft.VAL_FILE.exists() or not TOKENS.parent.joinpath("..", "checkpoints", "stories_bpe.json").exists(),
+@pytest.mark.skipif(not instruct_sft.VAL_FILE.exists() or not TOKENS.parent.joinpath("..", "checkpoints", "stories", "stories_bpe.json").exists(),
                     reason="needs TinyStories-Instruct-valid.txt and the tokeniser")
 def test_instruct_dataset_is_compact_and_unchanged():
     """The full instruct file as Python lists needed ~17 GB, too much for a 32 GB machine."""
-    from word_bpe import TOKENISER, WordBPE
-    import sft
+    from core.word_bpe import TOKENISER, WordBPE
+    from stories import sft
     tok = WordBPE.load(TOKENISER)
     X, Y = instruct_sft.dataset(tok, instruct_sft.VAL_FILE, limit=20)
     assert X.dtype == Y.dtype == torch.int16 and X.shape == Y.shape == (20, sft.BLOCK)
@@ -351,7 +351,7 @@ def test_instruct_dataset_is_compact_and_unchanged():
     assert torch.equal(Y.long(), torch.tensor([y for _, y in lists]))       # -100 survives int16
 
 def test_fine_tune_takes_int16():
-    import sft
+    from stories import sft
     model = gpt.GPT(**dict(TINY, block=sft.BLOCK, vocab=4096))
     torch.manual_seed(2)
     X = torch.randint(0, 4096, (8, sft.BLOCK))

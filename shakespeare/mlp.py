@@ -12,8 +12,8 @@ Shapes, for a batch of B examples:
 """
 import numpy as np
 
-from bigram_sgd import softmax
-from data import V, decode, stoi, train, val
+from shakespeare.bigram_sgd import softmax
+from core.data import V, decode, stoi, train, val
 
 BLOCK = 8      # characters of context
 EMB = 16       # size of each character's embedding vector

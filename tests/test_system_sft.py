@@ -7,9 +7,9 @@ import random
 
 import pytest
 
-import sft
-import system_sft as ss
-from word_bpe import WordBPE
+from stories import sft
+from web import system_sft as ss
+from core.word_bpe import WordBPE
 
 ANSWERS = ["Camels use the fat in their humps for energy. They can also drink a lot of water at once.",
            "Tope",

@@ -8,9 +8,9 @@ the blocks is the same.
 Chinchilla: about 20 training tokens per parameter, ~2B. The default, 2.7B tokens, is
 ~4 of FineWeb-Edu's big files after web_data.py has encoded them.
 
-    python web_data.py encode train data/fineweb_edu_00{0,1,2,3}.parquet --max-tokens 2.7e9
-    python web_gpt.py --compile                            # on a rented GPU, ~5-6 h on a 5090
-    python web_gpt.py --emb 256 --heads 4 --layers 4 --block 256 --batch 8 --accum 1 --tokens 5e6   # a quick check
+    python -m web.web_data encode train data/fineweb_edu_00{0,1,2,3}.parquet --max-tokens 2.7e9
+    python -m web.web_gpt --compile                            # on a rented GPU, ~5-6 h on a 5090
+    python -m web.web_gpt --emb 256 --heads 4 --layers 4 --block 256 --batch 8 --accum 1 --tokens 5e6   # a quick check
 """
 import argparse
 import math
@@ -19,18 +19,18 @@ from pathlib import Path
 
 import torch
 
-import gpt
-import web_data
-from web_data import EOT_ID, TOKENISER, VOCAB_SIZE
-from word_bpe import WordBPE
+from core import gpt
+from web import web_data
+from web.web_data import EOT_ID, TOKENISER, VOCAB_SIZE
+from core.word_bpe import WordBPE
 
 CONFIG = dict(block=1024, emb=768, heads=12, layers=12, dropout=0.0, vocab=VOCAB_SIZE, gelu=True, tied=True,
               scaled_init=True)
-CHECKPOINTS = Path("checkpoints")
+CHECKPOINTS = Path("checkpoints/web")
 PROMPTS = ["The water cycle is", "In 1905, Albert Einstein", "To make bread, you need"]
 
 def checkpoint_path(config, tag=None):
-    """checkpoints/web_gpt_768w12l.pt, then _tag if given."""
+    """checkpoints/web/web_gpt_768w12l.pt, then _tag if given."""
     return CHECKPOINTS / (f"web_gpt_{config['emb']}w{config['layers']}l" + (f"_{tag}" if tag else "") + ".pt")
 
 def steps_for(tokens, B, block, accum=1):
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     parser.add_argument("--log-every", type=int, default=250, help="steps between val losses (default 250)")
     parser.add_argument("--tag", help="a label for the checkpoint name")
     parser.add_argument("--snapshots", action="store_true",
-                        help="also save the model at steps 64, 128, 256, ... in checkpoints/snapshots/")
+                        help="also save the model at steps 64, 128, 256, ... in checkpoints/web/snapshots/")
     parser.add_argument("--compile", action="store_true", help="train through torch.compile: for CUDA")
     parser.add_argument("--scaled-init", action=argparse.BooleanOptionalAction, default=CONFIG["scaled_init"],
                         help="GPT-2's smaller init for the layers that write to the residual stream (default on)")

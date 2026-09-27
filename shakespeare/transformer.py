@@ -9,13 +9,13 @@ layer. A block fixes both:
 and a transformer is a stack of these blocks. Every block keeps the shape (B, T, C),
 so they stack like Lego.
 
-    python transformer.py
+    python -m shakespeare.transformer
 """
 import torch
 import torch.nn as nn
 
-from attention import BLOCK, Head, batch, generate, train_model, val_loss
-from data import V, train, val
+from core.attention import BLOCK, Head, batch, generate, train_model, val_loss
+from core.data import V, train, val
 
 EMB, N_HEAD = 64, 4
 
