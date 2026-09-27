@@ -36,3 +36,18 @@ def test_train_model_passes_val_B(monkeypatch):
     model = gpt.GPT(block=16, emb=12, heads=3, layers=1, dropout=0.0, vocab=50)
     gpt.train_model(model, "cpu", STEPS=4, B=2, WARMUP=1, log_every=2, train_ids=ids, val_ids=ids, val_B=3)
     assert seen == [3, 3]
+
+def test_instruct_sft_picks_the_web_tokeniser():
+    from pathlib import Path
+    import instruct_sft, web_data, word_bpe
+    assert instruct_sft.tokeniser_for(Path("checkpoints/web_gpt_768w12l_anneal.pt")) == web_data.TOKENISER
+    assert instruct_sft.tokeniser_for(Path("checkpoints/stories_gpt_384w6l.pt")) == word_bpe.TOKENISER
+
+def test_sft_example_ends_with_the_tokenisers_own_end_of_text():
+    import sft
+    from word_bpe import WordBPE
+    tok = WordBPE.train(["the cat sat on the mat and the dog ran"] * 5, 262)
+    x, y = sft.make_example(tok, "User: hi\nAssistant: ", "the cat sat")
+    answer = tok.encode("the cat sat")
+    assert [t for t in y if t != sft.IGNORE] == answer + [tok.eot_id]
+    assert x[-1] == tok.eot_id                   # padding
