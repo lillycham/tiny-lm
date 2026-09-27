@@ -307,8 +307,7 @@ def run_interp(model, tok, path):
 def run_ablation(model, tests):
     tables = ablation_table(model, tests)
     for (name, table) in tables.items():
-        print(f"\n   Ablation, {name}: change when each head is switched off")
-        print_table(name, table)
+        print_table(f"\n   Ablation, {name}: change when each head is switched off", table)
         layer, head = divmod(table.argmin().item(), table.shape[1])
         print(f"   Most important: layer {layer} head {head} ({table[layer, head]:+.2f} nats when switched off)")
 
