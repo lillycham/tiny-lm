@@ -1,0 +1,36 @@
+"""web_gpt.py: the model size, the step count, the checkpoint names, and val_B."""
+import pytest
+import torch
+
+import gpt
+import web_gpt as wg
+
+def test_the_default_model_is_gpt2_small_sized():
+    """GPT-2 small's blocks (85M), with our smaller vocabulary. Built on the meta device:
+       shapes only, no memory."""
+    with torch.device("meta"):
+        model = gpt.GPT(**wg.CONFIG)
+    total, blocks = wg.count(model)
+    C = 768
+    # Per block: weights 3C² (qkv) + C² (proj) + 8C² (feed-forward); biases C (proj) + 5C
+    # (feed-forward), no qkv bias; two LayerNorms 4C. Then the final LayerNorm, 2C.
+    assert blocks == 12 * (12 * C * C + 6 * C + 4 * C) + 2 * C
+    assert 84e6 < blocks < 86e6 and 97e6 < total < 99e6
+    assert model.out.weight is model.tok.weight                     # tied: the embedding counts once
+
+def test_steps_for():
+    assert wg.steps_for(2.7e9, 32, 1024) == 82_397
+    assert wg.steps_for(10, 32, 1024) == 1                          # never 0
+
+def test_checkpoint_path():
+    assert wg.checkpoint_path(wg.CONFIG).name == "web_gpt_768w12l.pt"
+    assert wg.checkpoint_path(dict(wg.CONFIG, emb=256, layers=4), "test").name == "web_gpt_256w4l_test.pt"
+
+def test_train_model_passes_val_B(monkeypatch):
+    """At 1,024 tokens and 16,384 classes, val_loss's default B=64 needs ~4 GB for its logits."""
+    seen = []
+    monkeypatch.setattr(gpt, "val_loss", lambda model, ids, device, B=64: seen.append(B) or 0.0)
+    ids = torch.randint(0, 50, (500,))
+    model = gpt.GPT(block=16, emb=12, heads=3, layers=1, dropout=0.0, vocab=50)
+    gpt.train_model(model, "cpu", STEPS=4, B=2, WARMUP=1, log_every=2, train_ids=ids, val_ids=ids, val_B=3)
+    assert seen == [3, 3]

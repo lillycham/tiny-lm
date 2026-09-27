@@ -248,7 +248,7 @@ def is_snapshot_step(n):
 
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
                 train_ids=None, val_ids=None, resume=None, resume_minutes=30,
-                snapshots=None, compile=False):
+                snapshots=None, compile=False, val_B=64):
     """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
 
     Trains on the character IDs from data.py, or on train_ids and val_ids if given.
@@ -260,6 +260,9 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
 
     With snapshots, a path like checkpoints/snapshots/stories_gpt: also save the model
     at steps 64, 128, 256, ... as stories_gpt_step64.pt and so on, to see how it changes.
+
+    val_B is the batch size for the val loss. Lower it for long contexts and big
+    vocabularies: the logits of one batch are B x block x vocab floats.
     """
     step_model = torch.compile(model) if compile else model
     if train_ids is None:
@@ -305,7 +308,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         opt.step()
         if log_every and (step + 1) % log_every == 0:
             print(f"step {step + 1:5d}  train loss {loss.item():.4f}"
-                  f"  val loss {val_loss(model, val_ids, device):.4f}  ({time.time() - start:.0f}s)", flush=True)
+                  f"  val loss {val_loss(model, val_ids, device, B=val_B):.4f}  ({time.time() - start:.0f}s)", flush=True)
         if snapshots and is_snapshot_step(step + 1):
             save(model, snapshots.with_name(f"{snapshots.name}_step{step + 1}.pt"))
         if resume and time.time() - last_save > resume_minutes * 60:
