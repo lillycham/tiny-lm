@@ -294,7 +294,8 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     for step in range(first, STEPS):
         for group in opt.param_groups:
             group["lr"] = lr_at(step)
-        loss = lm_loss(model, *batch(train_ids, B, model.block, device))
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
+            loss = lm_loss(model, *batch(train_ids, B, model.block, device))
         opt.zero_grad()
         loss.backward()
         # Scale down very big gradients, so one unusual batch can't wreck the weights.
