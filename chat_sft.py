@@ -42,10 +42,15 @@ def prompt(instruction, context=""):
         return f"User: {instruction.strip()}\n\n{context.strip()}\nAssistant: "
     return f"User: {instruction.strip()}\nAssistant: "
 
-def conversation(history, question, context=""):
+def conversation(history, question, context="", system=""):
     """The prompt for question after earlier turns, each (question, context, answer) written
-    as in training, one after another. Dolly has no follow-ups, so the model never saw this."""
-    return "".join(prompt(q, c) + a.strip() + "\n" for q, c, a in history) + prompt(question, context)
+    as in training, one after another. Dolly has no follow-ups, so the model never saw this.
+
+    A system prompt goes first, as "System: ...". Dolly has none either: to the model it
+    is only more text before the question.
+    """
+    start = f"System: {system.strip()}\n" if system.strip() else ""
+    return start + "".join(prompt(q, c) + a.strip() + "\n" for q, c, a in history) + prompt(question, context)
 
 def load_rows(path=DOLLY):
     with open(path, encoding="utf-8") as f:

@@ -147,10 +147,14 @@
       <div class="row"><label class="grow">Words <input type="text" id="words" value="dragon, soup, happy"></label></div>
       <div class="features" id="features"></div>
     </div>
-    <div id="in-chat" class="hidden row">
-      <label><input type="checkbox" id="remember" checked> Remember earlier turns
-        (it was trained on single questions)</label>
-      <button class="btn ghost" id="newChat">New chat</button>
+    <div id="in-chat" class="hidden">
+      <textarea id="system" style="min-height:40px; margin-bottom:8px"
+        placeholder="System prompt (optional), sent first as &quot;System: ...&quot;. The model was never trained with one."></textarea>
+      <div class="row">
+        <label><input type="checkbox" id="remember" checked> Remember earlier turns
+          (it was trained on single questions)</label>
+        <button class="btn ghost" id="newChat">New chat</button>
+      </div>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -264,7 +268,7 @@ document.addEventListener("keydown", e => {
 function request() {
   return {
     mode, text: $("text").value, name: $("name").value, words: $("words").value,
-    question: $("question").value, context: $("context").value,
+    question: $("question").value, context: $("context").value, system: $("system").value,
     features: [...$("features").querySelectorAll("input:checked")].map(i => i.value),
     after_eot: mode === "story" ? $("afterEot").checked : false,
     temperature: +$("temp").value, max_tokens: +$("maxTokens").value, seed: +$("seed").value,

@@ -14,7 +14,7 @@ Four kinds of request, as in training:
     name       "User: Tell me a story about Zork.\\nAssistant: "  (sft.py)
     instruct   "User: Tell me a story that uses the words ...\\nAssistant: "  (instruct_sft.py)
     chat       "User: <question>\\n\\n<context, if any>\\nAssistant: "  (chat_sft.py, web models),
-               after the earlier turns of the conversation, if the page sends them
+               after a system prompt and the earlier turns of the conversation, if given
 
 The server is Python's own http.server, so there is nothing new to install. It
 listens on 127.0.0.1 only: the models run on this machine, for this machine.
@@ -97,7 +97,7 @@ class Models:
             return self.cache[path]
 
 # ---------- requests ----------
-def build_prompt(mode, text="", name="", words="", features=(), question="", context="", history=()):
+def build_prompt(mode, text="", name="", words="", features=(), question="", context="", history=(), system=""):
     """(prompt text, whether it starts after <|endoftext|>) for one kind of request."""
     if mode == "story":
         return text, True
@@ -119,7 +119,7 @@ def build_prompt(mode, text="", name="", words="", features=(), question="", con
         if not all(isinstance(t, (list, tuple)) and len(t) == 3 and all(isinstance(x, str) for x in t)
                    for t in history):
             raise ValueError("history must be a list of [question, context, answer]")
-        return chat_sft.conversation(history, question, context), False
+        return chat_sft.conversation(history, question, context, system), False
     raise ValueError(f"Unknown mode {mode!r}")
 
 def piece(tok, i):
@@ -243,7 +243,8 @@ class Handler(BaseHTTPRequestHandler):
         model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
         prompt, after_eot = build_prompt(req.get("mode", "story"), req.get("text", ""), req.get("name", ""),
                                          req.get("words", ""), req.get("features", []),
-                                         req.get("question", ""), req.get("context", ""), req.get("history", []))
+                                         req.get("question", ""), req.get("context", ""), req.get("history", []),
+                                         req.get("system", ""))
         after_eot = req.get("after_eot", after_eot)
         prompt_ids = ([tok.eot_id] if after_eot else []) + tok.encode(prompt)
         if not prompt_ids:
