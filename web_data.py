@@ -39,9 +39,9 @@ VAL_GROUPS = 5                        # its first 5 row groups (~5,000 documents
 TOKENISER_GROUPS = range(10, 30)      # ~20,000 documents (~95 MB) train the tokeniser
 
 # ---------- reading ----------
-def read_group(path, group):
-    """The texts of one row group of a Parquet file."""
-    return pq.ParquetFile(path).read_row_group(group, columns=["text"]).column("text").to_pylist()
+def read_group(path, group, column="text"):
+    """The texts of one row group of a Parquet file. SimpleStories keeps them in "story"."""
+    return pq.ParquetFile(path).read_row_group(group, columns=[column]).column(column).to_pylist()
 
 def jobs(split, files=()):
     """(path, row group) for every row group in the split, in order.
@@ -69,35 +69,36 @@ def train_tokeniser(path=SAMPLE, groups=TOKENISER_GROUPS, vocab_size=VOCAB_SIZE)
 
 # ---------- encoding, on every core ----------
 tok = None      # each worker process's own tokeniser, set by start_worker
+column = "text" # and the Parquet column its texts are in
 
-def start_worker(tokeniser_path):
+def start_worker(tokeniser_path, text_column="text"):
     """Runs once in each worker process, before its first job.
 
     Every process has its own memory, so each needs its own tokeniser. Loading it
     here, once per process, is much cheaper than sending it along with every job.
     Each copy also keeps its own cache of encoded words, which grows as it works.
     """
-    global tok
-    tok = WordBPE.load(tokeniser_path)
+    global tok, column
+    tok, column = WordBPE.load(tokeniser_path), text_column
 
 def encode_group(job):
     """One job, (path, row group) -> its tokens: each document, then <|endoftext|>,
-    as one uint16 array. Runs in a worker process, with the global tok."""
+    as one uint16 array. Runs in a worker process, with the globals tok and column."""
     path, group = job
 
-    texts = read_group(path, group)
+    texts = read_group(path, group, column)
     return np.array([id for text in texts 
                      for id in (tok.encode(text) + [EOT_ID])],
                      dtype=np.uint16)
 
-def encode(job_list, out, processes=None, tokeniser_path=TOKENISER, max_tokens=None):
+def encode(job_list, out, processes=None, tokeniser_path=TOKENISER, max_tokens=None, column="text"):
     """Encode every job in a Pool of worker processes, and append the tokens to out,
     in job order. Stop after the job that passes max_tokens. Returns the count."""
     out.parent.mkdir(parents=True, exist_ok=True)
     total, start = 0, time.time()
 
     with open(out, "wb") as f, mp.Pool(processes, initializer=start_worker,
-                                 initargs=(tokeniser_path,)) as pool:
+                                 initargs=(tokeniser_path, column)) as pool:
         for count, a in enumerate(pool.imap(encode_group, job_list), 1):
             a.tofile(f)
             total += len(a)
