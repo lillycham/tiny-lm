@@ -52,7 +52,7 @@ def make_example(tok, prompt, answer):
 
     x is the input and y the targets, shifted by one as in every model so far.
     """
-    ids = tok.encode(prompt) + tok.encode(answer) + [EOT_ID]
+    ids = tok.encode(prompt) + tok.encode(answer) + [tok.eot_id]
     if len(ids) > BLOCK + 1:
         return None
     # TODO(Lilly): four steps.
@@ -71,7 +71,7 @@ def make_example(tok, prompt, answer):
 
     pad = BLOCK - len(x)
 
-    return x + [EOT_ID] * pad, y + [IGNORE] * pad
+    return x + [tok.eot_id] * pad, y + [IGNORE] * pad
 
 def dataset(tok, max_bytes):
     """Every conversation that fits, as two (N, BLOCK) tensors, and the names in it."""
@@ -100,7 +100,7 @@ def answer_loss(model, X, Y, device, B=64):
 def name_test(model, tok, names, samples=3, temperature=0.8):
     """For each name, how many of the model's stories use that name."""
     return {name: sum(name in gpt.generate(model, 250, prompt(name), temperature, tok.encode, tok.decode,
-                                           stop=EOT_ID) for _ in range(samples))
+                                           stop=tok.eot_id) for _ in range(samples))
             for name in names}
 
 def show_test(title, result, samples, seen):

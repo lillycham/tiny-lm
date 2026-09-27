@@ -15,6 +15,10 @@ sft.py's model, so the before and after are a clean comparison.
     python instruct_sft.py     # about 8 minutes on the GPU, with the checks
     python instruct_sft.py --train-file data/TinyStories-Instruct-train-300MB.txt --steps 6000 --tag 300mb
     python main.py instruct --start "dragon, soup, happy"
+
+The web model (web_gpt_*, Part 3) works too, with its own tokeniser:
+    python instruct_sft.py --base checkpoints/web_gpt_768w12l_anneal.pt \
+        --train-file data/TinyStories-Instruct-train-300MB.txt --steps 2000 --lr 1e-4 --tag 300mb
 """
 import argparse
 import re
@@ -27,7 +31,8 @@ import torch
 import gpt
 import sft
 import stories_gpt
-from word_bpe import EOT, EOT_ID, TOKENISER, WordBPE
+import web_data
+from word_bpe import EOT, TOKENISER, WordBPE
 
 TRAIN_FILE = Path("data/TinyStories-Instruct-train-30MB.txt")   # the first 30 MB of the 2.7 GB file
 VAL_FILE = Path("data/TinyStories-Instruct-valid.txt")
@@ -37,6 +42,10 @@ def output_path(base, tag=None):
     """Where to save: stories_instruct.pt with base's sizes added, then _tag if given."""
     out = stories_gpt.fine_tuned_path(CHECKPOINT, base)
     return out.with_name(f"{out.stem}_{tag}.pt") if tag else out
+
+def tokeniser_for(base):
+    """The web models have their own tokeniser; every other base uses the story one."""
+    return web_data.TOKENISER if base.name.startswith("web_gpt") else TOKENISER
 
 # How each feature reads in a request: "..., with dialogue and a twist."
 FEATURES = {
@@ -129,7 +138,7 @@ def follow_test(model, tok, tests, temperature=0.8):
     used = total = 0
     quotes = {True: [0, 0], False: [0, 0]}     # asked for dialogue? -> [stories with ", stories]
     for words, features, p, _ in tests:
-        story = gpt.generate(model, 300, p, temperature, tok.encode, tok.decode, stop=EOT_ID)
+        story = gpt.generate(model, 300, p, temperature, tok.encode, tok.decode, stop=tok.eot_id)
         used += words_used(story, words)
         total += len(words)
         q = quotes["Dialogue" in features]
@@ -153,9 +162,10 @@ if __name__ == "__main__":
                         help=f"the training examples (default {TRAIN_FILE})")
     parser.add_argument("--tag", help="a label for the checkpoint name, e.g. 300mb, so it doesn't replace the default run")
     parser.add_argument("--tests", type=int, default=40, help="held-out requests to test (default 40)")
+    parser.add_argument("--lr", type=float, default=3e-4, help="learning rate (default 3e-4; lower for big bases)")
     args = parser.parse_args()
     out = output_path(args.base, args.tag)
-    tok = WordBPE.load(TOKENISER)
+    tok = WordBPE.load(tokeniser_for(args.base))
 
     print(f"1. {request(['help', 'mud', 'bossy'], ['Dialogue', 'Twist'])}")
     print(f"   {request(['dragon'], [])}")
@@ -178,7 +188,7 @@ if __name__ == "__main__":
     print(f"\n3. Before SFT: val answer loss {sft.answer_loss(model, *val, args.device):.4f}")
     show_test("   Test", follow_test(model, tok, tests))
 
-    sft.fine_tune(model, X, Y, args.device, STEPS=args.steps, val=val)
+    sft.fine_tune(model, X, Y, args.device, STEPS=args.steps, LR=args.lr, val=val)
     gpt.save(model, out)
 
     torch.manual_seed(0)
@@ -187,5 +197,5 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     p = prompt(request(["dragon", "soup", "happy"], ["Dialogue"]))
     print("\n   " + p.replace("\n", "\n   ")
-          + gpt.generate(model, 300, p, 0.8, tok.encode, tok.decode, stop=EOT_ID))
+          + gpt.generate(model, 300, p, 0.8, tok.encode, tok.decode, stop=tok.eot_id))
     print(f"\nSaved to {out}")
