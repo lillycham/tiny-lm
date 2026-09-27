@@ -159,3 +159,25 @@ def test_bad_requests_get_400(server, path, body):
     with pytest.raises(urllib.error.HTTPError) as e:
         call(server + path, body)
     assert e.value.code == 400 and json.loads(e.value.read())["error"]
+
+def test_web_models_are_listed_with_their_family(tmp_path):
+    (tmp_path / "snapshots").mkdir()
+    for name in ["stories_gpt_384w6l.pt", "web_gpt_768w12l.pt", "web_gpt_768w12l_anneal.pt",
+                 "web_gpt_768w12l.resume.pt", "snapshots/web_gpt_768w12l_step64.pt"]:
+        (tmp_path / name).touch()
+    got = {m["path"]: (m["family"], m["group"]) for m in pg.list_models(tmp_path)}
+    assert got == {"stories_gpt_384w6l.pt": ("stories", "models"),
+                   "web_gpt_768w12l.pt": ("web", "models"),
+                   "web_gpt_768w12l_anneal.pt": ("web", "models"),
+                   "snapshots/web_gpt_768w12l_step64.pt": ("web", "snapshots")}
+
+def test_pieces_use_the_tokenisers_own_end_of_text():
+    """A bigger tokeniser has a real token at the story EOT_ID, 4095."""
+    texts = ["the cat sat on the mat and the dog ran"] * 5
+    tok = WordBPE.train(texts, 262)
+    assert tok.eot_id == 256 + len(tok.merges)
+    assert pg.piece(tok, tok.eot_id) == "<|endoftext|>" and pg.token_bytes(tok, tok.eot_id) == b""
+    assert pg.piece(tok, 256) == tok.vocab[256].decode()
+
+def test_story_tokeniser_keeps_its_end_of_text_id(tok):
+    assert tok.eot_id == EOT_ID == VOCAB_SIZE - 1
