@@ -75,3 +75,13 @@ def test_encode_replaces_an_old_file(files, tmp_path):
     wd.encode([(path, 0)], out, 1, tok_path)
     wd.encode([(path, 0)], out, 1, tok_path)
     assert np.memmap(out, dtype=np.uint16, mode="r").tolist() == expected(tok, DOCS[0:2])
+
+def test_encode_another_column(files, tmp_path):
+    """SimpleStories keeps its texts in "story", not "text"."""
+    _, tok_path, tok = files
+    path = tmp_path / "stories.parquet"
+    pq.write_table(pa.table({"story": DOCS[:4], "topic": ["a"] * 4}), path, row_group_size=2)
+    assert wd.read_group(path, 1, "story") == DOCS[2:4]
+    out = tmp_path / "stories.bin"
+    wd.encode([(path, 0), (path, 1)], out, processes=1, tokeniser_path=tok_path, column="story")
+    assert np.fromfile(out, dtype=np.uint16).tolist() == expected(tok, DOCS[:4])
