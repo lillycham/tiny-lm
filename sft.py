@@ -109,23 +109,30 @@ def show_test(title, result, samples, seen):
     print(f"{title}: {sum(result[n] for n in known)}/{len(known) * samples} for names in the SFT data,"
           f" {sum(result[n] for n in new)}/{len(new) * samples} for names it never saw")
 
-def fine_tune(model, X, Y, device, STEPS, B=32, LR=3e-4, WARMUP=50, val=None):
-    """AdamW, a short warm-up, then a constant learning rate: SFT is short."""
+def fine_tune(model, X, Y, device, STEPS, B=32, LR=3e-4, WARMUP=50, val=None, accum=1):
+    """AdamW, a short warm-up, then a constant learning rate: SFT is short.
+
+    With accum, each step is accum micro-batches of B // accum examples, as in
+    gpt.train_model: the same batch of B, in less memory.
+    """
     opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.1)
     model.train()
     start = time.time()
     for step in range(STEPS):
         for group in opt.param_groups:
             group["lr"] = LR * min(1, (step + 1) / WARMUP)
-        i = torch.randint(0, len(X), (B,))
-        loss = gpt.lm_loss(model, X[i].to(device).long(), Y[i].to(device).long())
         opt.zero_grad()
-        loss.backward()
+        total = 0
+        for _ in range(accum):
+            i = torch.randint(0, len(X), (B // accum,))
+            loss = gpt.lm_loss(model, X[i].to(device).long(), Y[i].to(device).long()) / accum
+            total += loss.detach()
+            loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         if (step + 1) % 100 == 0:
-            print(f"step {step + 1:4d}  train loss {loss.item():.4f}"
-                  f"  val answer loss {answer_loss(model, *val, device):.4f}  ({time.time() - start:.0f}s)", flush=True)
+            print(f"step {step + 1:4d}  train loss {float(total):.4f}"
+                  f"  val answer loss {answer_loss(model, *val, device, B=max(1, 64 // accum)):.4f}  ({time.time() - start:.0f}s)", flush=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
