@@ -10,7 +10,7 @@ Chinchilla: about 20 training tokens per parameter, ~2B. The default, 2.7B token
 
     python web_data.py encode train data/fineweb_edu_00{0,1,2,3}.parquet --max-tokens 2.7e9
     python web_gpt.py --compile                            # on a rented GPU, ~5-6 h on a 5090
-    python web_gpt.py --emb 256 --heads 4 --layers 4 --block 256 --batch 8 --tokens 5e6   # a quick check
+    python web_gpt.py --emb 256 --heads 4 --layers 4 --block 256 --batch 8 --accum 1 --tokens 5e6   # a quick check
 """
 import argparse
 import math
@@ -33,9 +33,9 @@ def checkpoint_path(config, tag=None):
     """checkpoints/web_gpt_768w12l.pt, then _tag if given."""
     return CHECKPOINTS / (f"web_gpt_{config['emb']}w{config['layers']}l" + (f"_{tag}" if tag else "") + ".pt")
 
-def steps_for(tokens, B, block):
-    """Training steps to see about `tokens` tokens, B sequences of block tokens a step."""
-    return max(1, round(tokens / (B * block)))
+def steps_for(tokens, B, block, accum=1):
+    """Training steps to see about `tokens` tokens, accum x B sequences of block tokens a step."""
+    return max(1, round(tokens / (accum * B * block)))
 
 def count(model):
     """(all parameters, the ones outside the embeddings). Chinchilla counts the second."""
@@ -51,12 +51,14 @@ if __name__ == "__main__":
     for name in ("block", "emb", "heads", "layers"):
         parser.add_argument(f"--{name}", type=int, default=CONFIG[name], help=f"default {CONFIG[name]}")
     parser.add_argument("--tokens", type=float, default=2.7e9, help="training tokens (default 2.7e9)")
-    parser.add_argument("--batch", type=int, default=32, help="sequences per step (default 32)")
+    parser.add_argument("--batch", type=int, default=32, help="sequences per micro-batch (default 32)")
+    parser.add_argument("--accum", type=int, default=4,
+                        help="micro-batches per step (default 4: 4 x 32 x 1,024 = 131k tokens a step; 16 is GPT-2's 0.5M)")
     parser.add_argument("--val-batch", type=int, default=16,
                         help="sequences per val loss batch (default 16; 64 would need ~4 GB for its logits)")
     parser.add_argument("--lr", type=float, default=6e-4, help="peak learning rate (default 6e-4, as GPT-2 small)")
-    parser.add_argument("--warmup", type=int, default=1000, help="warm-up steps (default 1000)")
-    parser.add_argument("--log-every", type=int, default=1000, help="steps between val losses (default 1000)")
+    parser.add_argument("--warmup", type=int, default=500, help="warm-up steps (default 500)")
+    parser.add_argument("--log-every", type=int, default=250, help="steps between val losses (default 250)")
     parser.add_argument("--tag", help="a label for the checkpoint name")
     parser.add_argument("--snapshots", action="store_true",
                         help="also save the model at steps 64, 128, 256, ... in checkpoints/snapshots/")
@@ -72,7 +74,7 @@ if __name__ == "__main__":
                   scaled_init=args.scaled_init)
     out = checkpoint_path(config, args.tag)
     resume = out.with_suffix(".resume.pt")
-    steps = steps_for(args.tokens, args.batch, args.block)
+    steps = steps_for(args.tokens, args.batch, args.block, args.accum)
 
     train_ids, val_ids = web_data.load_tokens("train"), web_data.load_tokens("val")
     tok = WordBPE.load(TOKENISER)
@@ -81,9 +83,9 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     model = gpt.GPT(**config).to(args.device)
     total, blocks = count(model)
-    seen = steps * args.batch * args.block
+    seen = steps * args.accum * args.batch * args.block
     print(f"\n1. {total:,} parameters, {blocks:,} outside the embeddings")
-    print(f"   {steps:,} steps of {args.batch} x {args.block} tokens: {seen / 1e9:.2f}B tokens,"
+    print(f"   {steps:,} steps of {args.accum} x {args.batch} x {args.block} tokens: {seen / 1e9:.2f}B tokens,"
           f" {seen / blocks:.0f} per parameter, {seen / len(train_ids):.2f} passes over the data")
     if seen > len(train_ids):
         print("   (more than one pass: encode more files for new data)")
@@ -95,7 +97,7 @@ if __name__ == "__main__":
     gpt.train_model(model, args.device, STEPS=steps, B=args.batch, LR=args.lr, WARMUP=args.warmup,
                     log_every=args.log_every, train_ids=train_ids, val_ids=val_ids, resume=resume,
                     snapshots=CHECKPOINTS / "snapshots" / out.stem if args.snapshots else None,
-                    compile=args.compile, val_B=args.val_batch)
+                    compile=args.compile, val_B=args.val_batch, accum=args.accum)
     gpt.save(model, out)
     resume.unlink(missing_ok=True)
     print(f"\nTrained in {(time.time() - t) / 60:.0f} minutes. Saved to {out}\n")

@@ -256,7 +256,7 @@ def is_snapshot_step(n):
 
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
                 train_ids=None, val_ids=None, resume=None, resume_minutes=30,
-                snapshots=None, compile=False, val_B=64):
+                snapshots=None, compile=False, val_B=64, accum=1):
     """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
 
     Trains on the character IDs from data.py, or on train_ids and val_ids if given.
@@ -271,6 +271,9 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
 
     val_B is the batch size for the val loss. Lower it for long contexts and big
     vocabularies: the logits of one batch are B x block x vocab floats.
+
+    With accum, each step is accum micro-batches of B sequences: their gradients add
+    up, then one optimizer step. Like a batch of accum x B, in the memory of B.
     """
     step_model = torch.compile(model) if compile else model
     if train_ids is None:
@@ -279,7 +282,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     first = 0
     if resume and resume.exists():
         saved = torch.load(resume, map_location=device, weights_only=False)
-        if (saved["STEPS"], saved["LR"], saved["config"]) != (STEPS, LR, model.config):
+        if (saved["STEPS"], saved["LR"], saved["config"], saved.get("accum", 1)) != (STEPS, LR, model.config, accum):
             raise ValueError(f"{resume} is from a run with other settings. Delete it to start again.")
         model.load_state_dict(saved["weights"])
         opt.load_state_dict(saved["optimizer"])
@@ -291,7 +294,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         """Write to a temporary file, then rename: a crash while saving can't break the old file."""
         tmp = resume.with_suffix(".tmp")
         torch.save({"weights": model.state_dict(), "optimizer": opt.state_dict(), "step": step,
-                    "rng": torch.random.get_rng_state(), "STEPS": STEPS, "LR": LR, "config": model.config,
+                    "rng": torch.random.get_rng_state(), "STEPS": STEPS, "LR": LR, "config": model.config, "accum": accum,
                     "info": run_info()}, tmp)
         tmp.replace(resume)
 
@@ -307,6 +310,14 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     for step in range(first, STEPS):
         for group in opt.param_groups:
             group["lr"] = lr_at(step)
+        # TODO(Lilly): accum micro-batches instead of one batch. Replace the 4 lines below:
+        #   - opt.zero_grad() once, before the micro-batches.
+        #   - accum times: draw a batch, and in the autocast block, compute its loss and
+        #     divide it by accum. Then backward() on it, outside the autocast block.
+        #     The gradients add up in .grad, so dividing makes them the mean's gradient.
+        #   - Keep loss as the total of the divided losses (a float, with .item()), so the
+        #     log line below prints the mean over the micro-batches. Change loss.item()
+        #     there to loss, then.
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
             loss = lm_loss(step_model, *batch(train_ids, B, model.block, device))
         opt.zero_grad()

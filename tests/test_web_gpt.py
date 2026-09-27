@@ -22,6 +22,7 @@ def test_the_default_model_is_gpt2_small_sized():
 def test_steps_for():
     assert wg.steps_for(2.7e9, 32, 1024) == 82_397
     assert wg.steps_for(10, 32, 1024) == 1                          # never 0
+    assert wg.steps_for(2.7e9, 32, 1024, accum=4) == 20_599            # 131k tokens a step
 
 def test_checkpoint_path():
     assert wg.checkpoint_path(wg.CONFIG).name == "web_gpt_768w12l.pt"
