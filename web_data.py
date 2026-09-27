@@ -84,26 +84,29 @@ def encode_group(job):
     """One job, (path, row group) -> its tokens: each document, then <|endoftext|>,
     as one uint16 array. Runs in a worker process, with the global tok."""
     path, group = job
-    # TODO(Lilly): read the row group's texts with read_group. Encode each one with
-    #   tok.encode, and put EOT_ID after it. Return them all as one np.uint16 array.
-    #   IDs go up to 16,383, so uint16 (up to 65,535) holds them all.
-    ...
+
+    texts = read_group(path, group)
+    return np.array([id for text in texts 
+                     for id in (tok.encode(text) + [EOT_ID])],
+                     dtype=np.uint16)
 
 def encode(job_list, out, processes=None, tokeniser_path=TOKENISER, max_tokens=None):
     """Encode every job in a Pool of worker processes, and append the tokens to out,
     in job order. Stop after the job that passes max_tokens. Returns the count."""
     out.parent.mkdir(parents=True, exist_ok=True)
     total, start = 0, time.time()
-    # TODO(Lilly): open out for writing bytes. Make an mp.Pool with processes workers,
-    #   and initializer=start_worker, initargs=(tokeniser_path,) so each worker loads
-    #   the tokeniser once. Then loop over pool.imap(encode_group, job_list):
-    #   - imap hands jobs to free workers, but gives the results back in job order,
-    #     so the file is in the same order as the Parquet files.
-    #   - Write each array to the file with its .tofile(f), and add its length to total.
-    #   - Print progress every 20 jobs or so: jobs done, tokens so far, tokens per second.
-    #   - Once total >= max_tokens (if max_tokens is set), stop: leave the loop. The
-    #     with block for the Pool then stops the workers.
-    ...
+
+    with open(out, "wb") as f, mp.Pool(processes, initializer=start_worker,
+                                 initargs=(tokeniser_path,)) as pool:
+        for count, a in enumerate(pool.imap(encode_group, job_list), 1):
+            a.tofile(f)
+            total += len(a)
+            if max_tokens is not None and max_tokens <= total:
+                break
+            if count % 20 == 0:
+                print(f"{count} jobs completed, tokens: {total:,}, tps: {total/(time.time() - start):,.0f}",
+                      flush=True)
+
     print(f"{total:,} tokens in {time.time() - start:.0f}s, saved to {out}", flush=True)
     return total
 
