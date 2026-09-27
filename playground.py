@@ -117,6 +117,17 @@ def token_bytes(tok, i):
     return b"" if i == tok.eot_id else tok.vocab[i]
 
 # ---------- sampling ----------
+def free_cache(device):
+    """Give the MPS allocator's unused blocks back.
+
+    The context grows by one token a step, so every step's tensors have a new size.
+    MPS keeps each freed block for a later tensor of the same size, which never
+    comes: 1,000 tokens from a web model held ~15 GB, with only ~0.4 GB in use.
+    Emptying the cache every token keeps it near 1 GB, at no measurable cost.
+    """
+    if device.type == "mps":
+        torch.mps.empty_cache()
+
 @torch.no_grad()
 def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None):
     """Yield one dict per new token, up to n tokens, ending early at <|endoftext|>.
@@ -135,6 +146,7 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None)
         with lock:
             x = torch.tensor([ids[-model.block:]], device=device)
             logits = model(x)[0, -1].float().cpu()
+            free_cache(device)
         p = F.softmax(logits, dim=-1)
         if temperature > 0:
             nxt = torch.multinomial(F.softmax(logits / temperature, dim=-1), 1, generator=g).item()
@@ -161,8 +173,10 @@ def attention_from(model, ids, t, lock=None):
     device = next(model.parameters()).device
     with lock, Recorder(model) as rec:
         model(torch.tensor([ids[start:t + 1]], device=device))
-    weights = [[[round(w, 4) for w in rec.attn[i][0, h, -1].tolist()] for h in range(rec.attn[i].shape[1])]
-               for i in range(len(model.blocks))]
+        weights = [[[round(w, 4) for w in rec.attn[i][0, h, -1].tolist()] for h in range(rec.attn[i].shape[1])]
+                   for i in range(len(model.blocks))]
+        rec.attn.clear(), rec.resid.clear()
+        free_cache(device)
     return start, weights
 
 # ---------- the server ----------
