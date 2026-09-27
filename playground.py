@@ -9,10 +9,11 @@
 - Tokens: the text split into its tokens, coloured by how likely each one was.
 - Attention: click a token to see where each head looked from it.
 
-Three kinds of request, as in training:
+Four kinds of request, as in training:
     story      plain text to continue, after <|endoftext|> as in pretraining
     name       "User: Tell me a story about Zork.\\nAssistant: "  (sft.py)
     instruct   "User: Tell me a story that uses the words ...\\nAssistant: "  (instruct_sft.py)
+    chat       "User: <question>\\n\\n<context, if any>\\nAssistant: "  (chat_sft.py, web models)
 
 The server is Python's own http.server, so there is nothing new to install. It
 listens on 127.0.0.1 only: the models run on this machine, for this machine.
@@ -29,6 +30,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
+import chat_sft
 import gpt
 import instruct_sft
 import sft
@@ -45,6 +47,8 @@ TOKENISERS = {"stories": word_bpe.TOKENISER, "web": web_data.TOKENISER}
 # ---------- models ----------
 def kind(path):
     """The kind of request a model was trained for, from its file name."""
+    if "_chat" in path.name:
+        return "chat"
     if path.name.startswith("stories_sft"):
         return "name"
     if path.name.startswith("stories_instruct"):
@@ -91,7 +95,7 @@ class Models:
             return self.cache[path]
 
 # ---------- requests ----------
-def build_prompt(mode, text="", name="", words="", features=()):
+def build_prompt(mode, text="", name="", words="", features=(), question="", context=""):
     """(prompt text, whether it starts after <|endoftext|>) for one kind of request."""
     if mode == "story":
         return text, True
@@ -107,6 +111,10 @@ def build_prompt(mode, text="", name="", words="", features=()):
         if unknown:
             raise ValueError(f"Unknown features {unknown}; use {list(instruct_sft.FEATURES)}")
         return instruct_sft.prompt(instruct_sft.request(ws, list(features))), False
+    if mode == "chat":
+        if not question.strip():
+            raise ValueError("A chat request needs a question")
+        return chat_sft.prompt(question, context), False
     raise ValueError(f"Unknown mode {mode!r}")
 
 def piece(tok, i):
@@ -229,7 +237,8 @@ class Handler(BaseHTTPRequestHandler):
         """Stream one JSON object per line: start, then one per token, then end."""
         model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
         prompt, after_eot = build_prompt(req.get("mode", "story"), req.get("text", ""), req.get("name", ""),
-                                         req.get("words", ""), req.get("features", []))
+                                         req.get("words", ""), req.get("features", []),
+                                         req.get("question", ""), req.get("context", ""))
         after_eot = req.get("after_eot", after_eot)
         prompt_ids = ([tok.eot_id] if after_eot else []) + tok.encode(prompt)
         if not prompt_ids:

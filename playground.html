@@ -103,6 +103,7 @@
       <button data-mode="story" class="on">Story</button>
       <button data-mode="name">Name SFT</button>
       <button data-mode="instruct">Instruct</button>
+      <button data-mode="chat">Chat</button>
     </div>
 
     <div class="row">
@@ -123,6 +124,11 @@
     <div id="in-instruct" class="hidden">
       <div class="row"><label class="grow">Words <input type="text" id="words" value="dragon, soup, happy"></label></div>
       <div class="features" id="features"></div>
+    </div>
+    <div id="in-chat" class="hidden">
+      <textarea id="question">Why is the sky blue?</textarea>
+      <textarea id="context" style="min-height:40px; margin-top:6px"
+        placeholder="Optional: a paragraph to answer from, as in Dolly's closed questions"></textarea>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -152,6 +158,7 @@ const PREFER = {  // the model each tab starts on, best first
   story: ["stories_gpt_384w6l_full.pt", "stories_gpt_384w6l.pt"],
   name: ["stories_sft_384w6l_full.pt", "stories_sft_384w6l.pt"],
   instruct: ["stories_instruct_384w6l_full_300mb.pt", "stories_instruct_384w6l_full.pt", "stories_instruct_384w6l.pt"],
+  chat: ["web_gpt_768w12l_anneal25_chat_s250.pt", "web_gpt_768w12l_anneal25_chat.pt"],
 };
 
 // Whitespace made visible, for short labels.
@@ -187,7 +194,7 @@ function pick(kind, not) {
 function setMode(m) {
   mode = m;
   for (const b of $("tabs").children) b.classList.toggle("on", b.dataset.mode === m);
-  for (const k of ["story", "name", "instruct"]) $("in-" + k).classList.toggle("hidden", k !== m);
+  for (const k of ["story", "name", "instruct", "chat"]) $("in-" + k).classList.toggle("hidden", k !== m);
   $("modelA").value = pick(m);
   $("modelB").value = pick(m, $("modelA").value);
 }
@@ -211,6 +218,7 @@ document.addEventListener("keydown", e => {
 function request() {
   return {
     mode, text: $("text").value, name: $("name").value, words: $("words").value,
+    question: $("question").value, context: $("context").value,
     features: [...$("features").querySelectorAll("input:checked")].map(i => i.value),
     after_eot: mode === "story" ? $("afterEot").checked : false,
     temperature: +$("temp").value, max_tokens: +$("maxTokens").value, seed: +$("seed").value,
