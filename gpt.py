@@ -247,7 +247,8 @@ def is_snapshot_step(n):
     return n >= 64 and n & (n - 1) == 0
 
 def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=500,
-                train_ids=None, val_ids=None, resume=None, resume_minutes=30, snapshots=None):
+                train_ids=None, val_ids=None, resume=None, resume_minutes=30,
+                snapshots=None, compile=False):
     """Train with AdamW. The learning rate warms up, then falls along a cosine curve.
 
     Trains on the character IDs from data.py, or on train_ids and val_ids if given.
@@ -260,6 +261,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
     With snapshots, a path like checkpoints/snapshots/stories_gpt: also save the model
     at steps 64, 128, 256, ... as stories_gpt_step64.pt and so on, to see how it changes.
     """
+    step_model = torch.compile(model) if compile else model
     if train_ids is None:
         train_ids, val_ids = torch.tensor(train), torch.tensor(val)
     opt = torch.optim.AdamW(param_groups(model, 0.1), lr=LR)
@@ -295,7 +297,7 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
         for group in opt.param_groups:
             group["lr"] = lr_at(step)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=(device == "cuda")):
-            loss = lm_loss(model, *batch(train_ids, B, model.block, device))
+            loss = lm_loss(step_model, *batch(train_ids, B, model.block, device))
         opt.zero_grad()
         loss.backward()
         # Scale down very big gradients, so one unusual batch can't wreck the weights.
