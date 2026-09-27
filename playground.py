@@ -1,9 +1,10 @@
-"""A playground in the browser for the story models: write, compare and look inside.
+"""A playground in the browser for the story and web models: write, compare and look inside.
 
     python playground.py                  # then open http://localhost:8000
     python playground.py --port 8080 --device cpu
 
 - Write: a story from any model in checkpoints/, token by token as it is made.
+  The web models (web_gpt_*, Part 3) use their own tokeniser; write the start of a text.
 - Compare: two models side by side, with the same request and the same seed.
 - Tokens: the text split into its tokens, coloured by how likely each one was.
 - Attention: click a token to see where each head looked from it.
@@ -31,12 +32,15 @@ import torch.nn.functional as F
 import gpt
 import instruct_sft
 import sft
+import web_data
+import word_bpe
 from interp import Recorder
-from word_bpe import EOT, EOT_ID, TOKENISER, WordBPE
+from word_bpe import EOT, WordBPE
 
 ROOT = Path("checkpoints")
 PAGE = Path(__file__).parent / "playground.html"
 MAX_TOKENS = 1000
+TOKENISERS = {"stories": word_bpe.TOKENISER, "web": web_data.TOKENISER}
 
 # ---------- models ----------
 def kind(path):
@@ -47,18 +51,27 @@ def kind(path):
         return "instruct"
     return "story"
 
+def family(path):
+    """Which tokeniser a model uses: "web" for web_gpt_*, else "stories"."""
+    return "web" if Path(path).name.startswith("web_gpt") else "stories"
+
 def step_of(path):
     """stories_gpt_384w6l_step1024.pt -> 1024, so snapshots sort by step, not as text."""
     m = re.search(r"_step(\d+)\.pt$", path.name)
     return int(m.group(1)) if m else -1
 
 def list_models(root=ROOT):
-    """Every story model in root, then the snapshots in root/snapshots. Not resume files,
-       and not the Shakespeare models, which use other tokenisers."""
-    models = sorted(p for p in root.glob("stories_*.pt") if not p.name.endswith(".resume.pt"))
-    snaps = sorted((root / "snapshots").glob("stories_*.pt"), key=lambda p: (p.name.split("_step")[0], step_of(p)))
-    return ([{"path": p.relative_to(root).as_posix(), "kind": kind(p), "group": "models"} for p in models]
-            + [{"path": p.relative_to(root).as_posix(), "kind": kind(p), "group": "snapshots"} for p in snaps])
+    """Every story and web model in root, then the snapshots in root/snapshots. Not resume
+       files, and not the Shakespeare models, which use character tokens."""
+    def found(folder):
+        return [p for pattern in ("stories_*.pt", "web_gpt_*.pt") for p in folder.glob(pattern)
+                if not p.name.endswith(".resume.pt")]
+    models = sorted(found(root))
+    snaps = sorted(found(root / "snapshots"), key=lambda p: (p.name.split("_step")[0], step_of(p)))
+    return ([{"path": p.relative_to(root).as_posix(), "kind": kind(p), "family": family(p), "group": "models"}
+             for p in models]
+            + [{"path": p.relative_to(root).as_posix(), "kind": kind(p), "family": family(p), "group": "snapshots"}
+               for p in snaps])
 
 class Models:
     """Load each model once, on first use, and keep it. One lock for all model work:
@@ -98,10 +111,10 @@ def build_prompt(mode, text="", name="", words="", features=()):
 
 def piece(tok, i):
     """One token's own text. A token can hold half of a character; that half shows as �."""
-    return EOT if i == EOT_ID else tok.vocab[i].decode("utf-8", errors="replace")
+    return EOT if i == tok.eot_id else tok.vocab[i].decode("utf-8", errors="replace")
 
 def token_bytes(tok, i):
-    return b"" if i == EOT_ID else tok.vocab[i]
+    return b"" if i == tok.eot_id else tok.vocab[i]
 
 # ---------- sampling ----------
 @torch.no_grad()
@@ -130,7 +143,7 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None)
         top_p, top_i = p.topk(top)
         yield {"id": nxt, "piece": piece(tok, nxt), "text": text.decode(token_bytes(tok, nxt)),
                "p": p[nxt].item(), "top": [[piece(tok, i), q] for i, q in zip(top_i.tolist(), top_p.tolist())]}
-        if nxt == EOT_ID:
+        if nxt == tok.eot_id:
             return
         ids.append(nxt)
 
@@ -155,7 +168,7 @@ def attention_from(model, ids, t, lock=None):
 # ---------- the server ----------
 class Handler(BaseHTTPRequestHandler):
     models = None       # set by make_server
-    tok = None
+    toks = None         # {family: WordBPE}
 
     def log_message(self, format, *args):     # quiet: no line for every request
         pass
@@ -200,11 +213,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def generate(self, req):
         """Stream one JSON object per line: start, then one per token, then end."""
-        model = self.models.get(req["model"])
+        model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
         prompt, after_eot = build_prompt(req.get("mode", "story"), req.get("text", ""), req.get("name", ""),
                                          req.get("words", ""), req.get("features", []))
         after_eot = req.get("after_eot", after_eot)
-        prompt_ids = ([EOT_ID] if after_eot else []) + self.tok.encode(prompt)
+        prompt_ids = ([tok.eot_id] if after_eot else []) + tok.encode(prompt)
         if not prompt_ids:
             raise ValueError("Give some text to start from")
         n = max(1, min(int(req.get("max_tokens", 300)), MAX_TOKENS))
@@ -218,22 +231,24 @@ class Handler(BaseHTTPRequestHandler):
         c = model.config
         try:
             write({"type": "start", "prompt": prompt, "prompt_ids": prompt_ids,
-                   "prompt_pieces": [piece(self.tok, i) for i in prompt_ids],
+                   "prompt_pieces": [piece(tok, i) for i in prompt_ids],
                    "params": sum(p.numel() for p in model.parameters()),
                    "shape": f"{c['layers']} layers x {c['heads']} heads, width {c['emb']}"
                             + (", smeared keys" if c.get("smear") else "")})
             t, count, reason = time.time(), 0, "length"
-            for token in sample(model, self.tok, prompt_ids, n, temperature, seed, lock=self.models.lock):
+            for token in sample(model, tok, prompt_ids, n, temperature, seed, lock=self.models.lock):
                 count += 1
-                if token["id"] == EOT_ID:
+                if token["id"] == tok.eot_id:
                     reason = "eot"
                 write({"type": "token", **token})
             write({"type": "end", "reason": reason, "tokens": count, "seconds": round(time.time() - t, 2)})
         except (BrokenPipeError, ConnectionResetError):
             pass        # the page pressed Stop, or closed: stop making tokens
 
-def make_server(root=ROOT, device="cpu", port=8000, tokeniser=TOKENISER):
-    handler = type("PlaygroundHandler", (Handler,), {"models": Models(root, device), "tok": WordBPE.load(tokeniser)})
+def make_server(root=ROOT, device="cpu", port=8000, tokenisers=TOKENISERS):
+    """tokenisers: {family: path}. A family whose tokeniser file is missing is left out."""
+    toks = {f: WordBPE.load(Path(p)) for f, p in tokenisers.items() if Path(p).exists()}
+    handler = type("PlaygroundHandler", (Handler,), {"models": Models(root, device), "toks": toks})
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 
 if __name__ == "__main__":

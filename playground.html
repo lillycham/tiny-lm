@@ -165,11 +165,12 @@ async function init() {
   $("features").innerHTML = res.features.map(f =>
     `<label><input type="checkbox" value="${f}"> ${f}</label>`).join("");
   for (const sel of [$("modelA"), $("modelB")]) {
-    for (const group of ["models", "snapshots"]) {
-      const items = models.filter(m => m.group === group);
+    for (const [family, group, label] of [["stories", "models", "story models"], ["web", "models", "web models"],
+                                          ["stories", "snapshots", "story snapshots"], ["web", "snapshots", "web snapshots"]]) {
+      const items = models.filter(m => m.family === family && m.group === group);
       if (!items.length) continue;
       const og = document.createElement("optgroup");
-      og.label = group;
+      og.label = label;
       for (const m of items) og.append(new Option(m.path, m.path));
       sel.append(og);
     }
