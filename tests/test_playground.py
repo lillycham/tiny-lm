@@ -13,6 +13,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+import chat_sft
 import gpt
 import instruct_sft
 import playground as pg
@@ -64,7 +65,8 @@ def test_prompts_match_training():
     got, after_eot = pg.build_prompt("instruct", words="dragon, soup ,happy", features=["Dialogue"])
     assert got == instruct_sft.prompt(instruct_sft.request(["dragon", "soup", "happy"], ["Dialogue"]))
     assert not after_eot
-    for bad in [dict(mode="name"), dict(mode="instruct", words=" , "),
+    assert pg.build_prompt("chat", question="Why?", context="Text.") == (chat_sft.prompt("Why?", "Text."), False)
+    for bad in [dict(mode="name"), dict(mode="instruct", words=" , "), dict(mode="chat", question=" "),
                 dict(mode="instruct", words="cat", features=["Sad"]), dict(mode="poem")]:
         with pytest.raises(ValueError):
             pg.build_prompt(**bad)
@@ -181,3 +183,11 @@ def test_pieces_use_the_tokenisers_own_end_of_text():
 
 def test_story_tokeniser_keeps_its_end_of_text_id(tok):
     assert tok.eot_id == EOT_ID == VOCAB_SIZE - 1
+
+def test_chat_models_open_the_chat_tab(tmp_path):
+    for name in ["web_gpt_768w12l_anneal25_chat.pt", "web_gpt_768w12l_anneal25_chat_s250.pt", "web_gpt_768w12l.pt"]:
+        (tmp_path / name).touch()
+    kinds = {m["path"]: (m["kind"], m["family"]) for m in pg.list_models(tmp_path)}
+    assert kinds == {"web_gpt_768w12l.pt": ("story", "web"),
+                     "web_gpt_768w12l_anneal25_chat.pt": ("chat", "web"),
+                     "web_gpt_768w12l_anneal25_chat_s250.pt": ("chat", "web")}
