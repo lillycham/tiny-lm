@@ -86,6 +86,8 @@ if __name__ == "__main__":
     parser.add_argument("--base", type=Path, default=BASE, help="the model to fine-tune (default %(default)s)")
     parser.add_argument("--steps", type=int, default=1000, help="fine-tuning steps (default 1000, ~2 passes)")
     parser.add_argument("--lr", type=float, default=5e-5, help="learning rate (default 5e-5)")
+    parser.add_argument("--accum", type=int, default=1,
+                        help="micro-batches per step of 32 (default 1; 4 for the Mac's memory)")
     parser.add_argument("--tag", help="a label for the checkpoint name")
     args = parser.parse_args()
     out = args.base.with_name(f"{args.base.stem}_chat" + (f"_{args.tag}" if args.tag else "") + ".pt")
@@ -103,7 +105,7 @@ if __name__ == "__main__":
     print(f"\n2. Before SFT: val answer loss {sft.answer_loss(model, *val, args.device):.4f}\n")
     show_answers(model, tok, QUESTIONS[:3])
 
-    sft.fine_tune(model, X, Y, args.device, STEPS=args.steps, LR=args.lr, val=val)
+    sft.fine_tune(model, X, Y, args.device, STEPS=args.steps, LR=args.lr, val=val, accum=args.accum)
     gpt.save(model, out)
 
     print(f"\n3. After SFT: val answer loss {sft.answer_loss(model, *val, args.device):.4f}\n")
