@@ -155,6 +155,76 @@ def test_fine_tuned_path():
     assert fine_tuned_path(sft, Path("checkpoints/stories/stories_gpt.pt")) == sft
     assert fine_tuned_path(sft, Path("checkpoints/stories/stories_gpt_384w6l.pt")).name == "stories_sft_384w6l.pt"
 
+# ---------- the KV cache ----------
+no_smear = pytest.mark.parametrize("options", [o for o in OPTIONS if not o["smear"]], ids=name)
+
+@no_smear
+@torch.no_grad()
+def test_cache_matches_a_full_forward(options):
+    """A fill of 10 tokens, then 6 one at a time: the same logits as the whole text at once.
+    Wrong positions after the fill, or a new token that sees only the first key, break this."""
+    model = tiny(**options).eval()
+    X = tokens()
+    full = model(X)
+    cache = gpt.KVCache(TINY["layers"])
+    got = [model(X[:, :10], cache=cache)]
+    assert cache.length == 10
+    assert all(layer.k.shape == layer.v.shape == (2, TINY["heads"], 10, TINY["emb"] // TINY["heads"])
+               for layer in cache.layers)
+    got += [model(X[:, t:t + 1], cache=cache) for t in range(10, TINY["block"])]
+    assert cache.length == TINY["block"]
+    assert torch.allclose(torch.cat(got, dim=1), full, atol=1e-5)
+
+@torch.no_grad()
+def test_cache_after_the_fill_takes_one_token():
+    model = tiny().eval()
+    cache = gpt.KVCache(TINY["layers"])
+    model(tokens()[:, :4], cache=cache)
+    with pytest.raises(NotImplementedError):
+        model(tokens()[:, 4:6], cache=cache)
+
+def test_smear_with_a_cache_raises():
+    with pytest.raises(NotImplementedError):
+        tiny(smear=True)(tokens(), cache=gpt.KVCache(TINY["layers"]))
+
+@pytest.mark.parametrize("n", [8, 40], ids=["short", "past the context"])
+def test_generate_is_the_same_with_the_cache(n):
+    """40 tokens after 3 go past the 16-token context, so the cache must refill."""
+    model = tiny()
+    runs = []
+    for kv_cache in (False, True):
+        torch.manual_seed(5)
+        runs.append(gpt.generate(model, n, [1, 2, 3], encode=list, decode=list, kv_cache=kv_cache))
+    assert len(runs[0]) == n and runs[0] == runs[1]
+
+def test_generate_ignores_the_cache_with_smear():
+    assert len(gpt.generate(tiny(smear=True), 5, [1, 2], encode=list, decode=list, kv_cache=True)) == 5
+
+def likes(*ids):
+    """A tiny model that samples only the tokens in ids, all equally likely."""
+    model = tiny()
+    with torch.no_grad():
+        model.out.bias[list(ids)] += 100
+    return model
+
+def test_generate_batch_stops_each_row_at_stop():
+    """Only 7 (stop) and 8 are likely: each row is some 8s, then a stop or max_new."""
+    torch.manual_seed(0)
+    out, stopped = gpt.generate_batch(likes(7, 8), [1, 2, 3], n=20, max_new=5, stop=7)
+    assert len(out) == len(stopped) == 20
+    assert all(set(row) <= {8} for row in out)
+    assert all(s or len(row) == 5 for row, s in zip(out, stopped))
+    assert any(stopped) and not all(len(row) == len(out[0]) for row in out)
+
+def test_generate_batch_without_stop_fills_max_new():
+    torch.manual_seed(0)
+    out, stopped = gpt.generate_batch(tiny(), [1, 2, 3], n=4, max_new=6)
+    assert [len(row) for row in out] == [6] * 4 and stopped == [False] * 4
+
+def test_generate_batch_checks_the_context():
+    with pytest.raises(ValueError):
+        gpt.generate_batch(tiny(), [1] * 10, n=2, max_new=7)
+
 # ---------- the real checkpoints ----------
 @pytest.mark.parametrize("path", sorted(p for p in CHECKPOINTS.glob("*/*.pt") if not p.name.endswith(".resume.pt")),
                          ids=lambda p: p.name)

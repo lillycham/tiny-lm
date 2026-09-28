@@ -39,6 +39,33 @@ CONFIG = dict(
 CHECKPOINT = Path("checkpoints/shakespeare/gpt.pt")
 
 # ---------- the model ----------
+class LayerCache:
+    """One layer's keys and values so far, each (B, n_head, T, hs), or None before the first call."""
+
+    def __init__(self):
+        self.k = self.v = None
+
+class KVCache:
+    """The keys and values of every token the model has seen, so generation needs no repeats.
+
+    Without a cache, generate() runs the whole text through the model for every new token.
+    But a token's key and value at a layer depend only on the tokens up to it, so they are
+    the same every time. With a cache:
+      1. The fill: run the prompt once. Every layer stores its keys and values.
+      2. Each step after: run only the newest token. Its query attends to the stored keys
+         and values, plus its own, and they are stored for the next step.
+    So each step costs one position, not the whole text.
+    """
+
+    def __init__(self, layers):
+        self.layers = [LayerCache() for _ in range(layers)]
+        self.length = 0     # tokens seen so far
+
+    def repeat(self, n):
+        """Copy a cache of one row to n rows, so n samples can carry on from one prompt fill."""
+        for layer in self.layers:
+            layer.k, layer.v = layer.k.repeat(n, 1, 1, 1), layer.v.repeat(n, 1, 1, 1)
+
 class CausalSelfAttention(nn.Module):
     """All the heads of MultiHeadAttention, computed together.
 
@@ -75,15 +102,33 @@ class CausalSelfAttention(nn.Module):
 
         return t.transpose(1,2).reshape(B, T, n_head * hs)
         
-    def forward(self, x):
-        """x (B, T, C) -> (B, T, C)."""
-        C = x.shape[-1]
+    def forward(self, x, cache=None):
+        """x (B, T, C) -> (B, T, C).
+
+        With a cache (a LayerCache), x holds only the new positions: the whole prompt at
+        the fill, then one token at a time.
+        """
+        B, T, C = x.shape
+        past = cache is not None and cache.k is not None
+        if cache is not None and self.smear:
+            raise NotImplementedError("smeared keys mix each key with the one before, so they don't cache as they are")
+        if past and T > 1:
+            raise NotImplementedError("after the fill, a cache takes one token at a time")
 
         q, k, v = self.qkv(x).split(C, dim=-1)
         q, k, v = self.split_heads(q), self.split_heads(k), self.split_heads(v)
 
         k = self.smear_keys(k)
 
+        if cache is not None:
+            # TODO(Lilly): put the cached keys and values in front of the new ones, and
+            #   store the result in cache.k and cache.v for the next call. Which axis is T?
+            #   (See split_heads.) With no past, there is nothing in front yet.
+            raise NotImplementedError
+
+        # TODO(Lilly): is_causal=True is right with no past. With a past, q has 1 row and k
+        #   has many. What does is_causal do then? (Draw the mask it makes: it lines up
+        #   from the top left.) Which keys should the new token see?
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         
         return self.drop(self.proj(self.join_heads(out)))
@@ -120,8 +165,8 @@ class Block(nn.Module):
         self.ln2 = nn.LayerNorm(C)
         self.ffwd = FeedForward(C, dropout, gelu)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln1(x))
+    def forward(self, x, cache=None):
+        x = x + self.attn(self.ln1(x), cache)
         x = x + self.ffwd(self.ln2(x))
         return x
 
@@ -161,12 +206,23 @@ class GPT(nn.Module):
                     nn.init.normal_(layer.weight, std=0.02 / math.sqrt(2 * layers))
                     nn.init.zeros_(layer.bias)
 
-    def forward(self, X, last_only=False):
+    def forward(self, X, last_only=False, cache=None):
         """X (B, T) IDs -> logits (B, T, V). With last_only, only the last position's,
         (B, 1, V): all that generation needs, and T times less work and memory for the
-        output layer (with 16,384 tokens and T = 1,024, 67 MB of logits instead of 64 KB)."""
-        x = self.tok(X) + self.pos(torch.arange(X.shape[1], device=X.device))
-        x = self.blocks(self.drop(x))
+        output layer (with 16,384 tokens and T = 1,024, 67 MB of logits instead of 64 KB).
+
+        With a cache (a KVCache), X holds only the tokens after the ones in the cache."""
+        first = 0
+        if cache is not None:
+            # TODO(Lilly): the tokens in X come after the cache.length tokens already seen.
+            #   Set first, the position of X's first token.
+            raise NotImplementedError
+        x = self.tok(X) + self.pos(torch.arange(first, first + X.shape[1], device=X.device))
+        x = self.drop(x)
+        for i, block in enumerate(self.blocks):
+            x = block(x, None if cache is None else cache.layers[i])
+        if cache is not None:
+            cache.length += X.shape[1]
         return self.out(self.ln(x[:, -1:] if last_only else x))
 
 # ---------- data ----------
@@ -335,24 +391,70 @@ def train_model(model, device, STEPS=5000, B=64, LR=1e-3, WARMUP=100, log_every=
 
 # ---------- generate text ----------
 @torch.no_grad()
-def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode, stop=None):
+def generate(model, n, start="\n", temperature=1.0, encode=encode, decode=decode, stop=None, kv_cache=False):
     """Sample n tokens after `start`. Temperature below 1 makes safer choices.
 
     The tokens are characters, unless you give another tokeniser's encode and decode.
     If the model samples the token ID stop, end there, without it.
+
+    With kv_cache, keep each token's keys and values (see KVCache), so each step runs one
+    token, not the whole context. Models with smeared keys ignore it. When the text fills
+    the context, every step refills the cache from the last `block` tokens: the same
+    result as without a cache, but no faster from there on.
     """
     model.eval()
     device = next(model.parameters()).device
     ids = torch.tensor([[int(i) for i in encode(start)]], device=device)
+    use_cache = kv_cache and not model.config.get("smear")
+    cache = None
     out = []
     for _ in range(n):
-        logits = model(ids[:, -model.block:])[0, -1] / temperature
+        if not use_cache:
+            logits = model(ids[:, -model.block:], last_only=True)[0, -1]
+        elif cache is None or cache.length == model.block:
+            cache = KVCache(len(model.blocks))
+            logits = model(ids[:, -model.block:], last_only=True, cache=cache)[0, -1]
+        else:
+            logits = model(ids[:, -1:], last_only=True, cache=cache)[0, -1]
+        logits = logits / temperature
         char_next = torch.multinomial(F.softmax(logits, dim=-1), 1)
         if char_next.item() == stop:
             break
         ids = torch.cat([ids, char_next[None]], dim=1)
         out.append(char_next.item())
     return decode(out)
+
+@torch.no_grad()
+def generate_batch(model, prompt_ids, n, max_new, temperature=1.0, stop=None):
+    """n samples of up to max_new tokens after the same prompt, all at once, with a KVCache.
+
+    Fills the cache with the prompt once, then copies it to n rows. Returns the n token
+    lists, each without the stop token, and for each row whether it stopped (True) or hit
+    max_new (False). Rows that have stopped carry on in the batch, but their tokens are
+    thrown away.
+    """
+    if len(prompt_ids) + max_new > model.block:
+        raise ValueError(f"{len(prompt_ids)} prompt tokens + {max_new} new is more than the context of {model.block}")
+    model.eval()
+    device = next(model.parameters()).device
+    cache = KVCache(len(model.blocks))
+    logits = model(torch.tensor([prompt_ids], device=device), last_only=True, cache=cache)[:, -1]
+    cache.repeat(n)
+    logits = logits.expand(n, -1)
+    out, stopped = [[] for _ in range(n)], [False] * n
+    for step in range(max_new):
+        new = torch.multinomial(F.softmax(logits / temperature, dim=-1), 1)     # (n, 1)
+        for i, t in enumerate(new[:, 0].tolist()):
+            if stopped[i]:
+                continue
+            if t == stop:
+                stopped[i] = True
+            else:
+                out[i].append(t)
+        if all(stopped) or step == max_new - 1:
+            break
+        logits = model(new, last_only=True, cache=cache)[:, -1]
+    return out, stopped
 
 def save(model, path=CHECKPOINT):
     """Save the weights and the sizes, so load() can rebuild the same model, and run_info()."""
