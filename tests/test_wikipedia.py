@@ -42,6 +42,12 @@ def test_split_jobs_puts_every_fiftieth_row_group_in_val(tmp_path):
     assert [g for _, g in val] == [49, 99] and len(train) == 98
     assert not {g for _, g in train} & {g for _, g in val}
 
+def test_split_jobs_always_has_a_val_group(tmp_path):
+    path = tmp_path / "small.parquet"
+    pq.write_table(pa.table({"text": [str(i) for i in range(4)]}), path, row_group_size=1)
+    train, val = wiki.split_jobs(path, val_share=0.02)
+    assert [g for _, g in val] == [3] and len(train) == 3
+
 def test_half_the_probe_people_are_held_out():
     names = [p[0] for p in knowledge.PEOPLE]
     assert len(knowledge.WIKI_HELD_OUT) == len(names) // 2

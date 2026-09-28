@@ -2,7 +2,7 @@
 
 Vital Articles are lists that editors keep of the articles Wikipedia most needs. Level 4
 has ~10,000, in 11 topics (People, History, Geography, Arts, ...): a clean, factual
-slice across everything, ~60M tokens. The lists are wiki pages; each article is a line
+slice across everything, ~105M tokens (articles average ~10,500 tokens). The lists are wiki pages; each article is a line
 that starts with "#", and its first link is the article:
 
     # {{Icon|GA}} '''[[Albert Einstein]]'''<!--b. 1879--> ([[Wikipedia:Vital articles/Level 3|Level 3]])
@@ -14,7 +14,7 @@ Half of the knowledge probe's people are left out (tools/knowledge.py WIKI_HELD_
 the probe can compare people the anneal read about with people it didn't.
 
     python -m web.wikipedia list                # data/vital_articles_4.json, ~1 min of API requests
-    python -m web.wikipedia download            # the dump, 11.6 GB: on a rented server
+    python -m web.wikipedia download            # the dump, 11.6 GB (~9 min at 22 MB/s)
     python -m web.wikipedia filter              # data/vital_articles_4.parquet
     python -m web.wikipedia encode              # data/wiki_{train,val}.bin
     python -m web.anneal --data wiki --share 0.25 --tag wiki25 --compile
@@ -115,7 +115,7 @@ def held_out_titles():
     return {ARTICLE_TITLES.get(name, name) for name in WIKI_HELD_OUT}
 
 # ---------- the text ----------
-def filter_dump(files, wanted, out, row_group_size=200):
+def filter_dump(files, wanted, out, row_group_size=20):
     """The rows of the dump's Parquet files whose title is in wanted ({title: topic}),
     as a Parquet file of title, topic and text. Reads the titles first, and the text
     only of the row groups with a match."""
@@ -137,11 +137,12 @@ def filter_dump(files, wanted, out, row_group_size=200):
     return len(kept)
 
 def split_jobs(path, val_share=VAL_SHARE):
-    """(train jobs, val jobs) for web_data.encode: every 1 / val_share-th row group is val."""
+    """(train jobs, val jobs) for web_data.encode: every 1 / val_share-th row group is val,
+    and always at least one (the last), even for a small sample."""
     n = pq.ParquetFile(path).num_row_groups
     every = max(2, round(1 / val_share))
-    val = [(path, g) for g in range(n) if g % every == every - 1]
-    return [(path, g) for g in range(n) if g % every != every - 1], val
+    val = set(range(every - 1, n, every)) or {n - 1}
+    return [(path, g) for g in range(n) if g not in val], [(path, g) for g in sorted(val)]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
