@@ -54,3 +54,22 @@ def test_half_the_probe_people_are_held_out():
     held = wiki.held_out_titles()
     assert "Napoleon" in held or "Napoleon Bonaparte" not in knowledge.WIKI_HELD_OUT
     assert "Albert Einstein" not in held                     # the first person is read
+
+def test_merge_keeps_one_row_per_title(tmp_path):
+    a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    pq.write_table(pa.Table.from_pylist([{"title": "B", "topic": "x", "text": "dump B"},
+                                         {"title": "A", "topic": "x", "text": "dump A"}]), a)
+    pq.write_table(pa.Table.from_pylist([{"title": "A", "topic": "x", "text": "api A"},
+                                         {"title": "C", "topic": "y", "text": "api C"}]), b)
+    out = tmp_path / "full.parquet"
+    assert wiki.merge([a, b], out) == 3
+    assert [(r["title"], r["text"]) for r in pq.read_table(out).to_pylist()] == \
+        [("A", "dump A"), ("B", "dump B"), ("C", "api C")]
+
+def test_fetch_missing_skips_what_it_has(tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr(wiki, "extract", lambda t: asked.append(t) or (None if t == "Gone" else f"Text of {t}."))
+    out = tmp_path / "api.parquet"
+    n, todo = wiki.fetch_missing({"A": "x", "B": "y", "Gone": "z"}, ["A"], out)
+    assert asked == ["B", "Gone"] and (n, todo) == (1, 2)
+    assert pq.read_table(out).to_pylist() == [{"title": "B", "topic": "y", "text": "Text of B."}]
