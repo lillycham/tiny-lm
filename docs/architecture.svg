@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900">
+  <style>
+    text { font-family: Charter, "Bitstream Charter", Georgia, serif; fill: #2f2f2f; }
+    .m { font-family: "Go Mono", Menlo, Consolas, monospace; }
+    .t  { font-size: 34px; font-weight: 700; }
+    .st { font-size: 18px; fill: #6b6b6b; }
+    .h  { font-size: 17px; font-weight: 700; }
+    .b  { font-size: 16px; }
+    .sm { font-size: 14px; fill: #6b6b6b; }
+    .ms { font-size: 13px; }
+    .c  { text-anchor: middle; }
+    .e  { text-anchor: end; }
+    .emb  { fill: #4a7276; }
+    .att  { fill: #4f6285; }
+    .mlp  { fill: #8a6b30; }
+    .out  { fill: #8a5561; }
+    .res  { fill: #4f7a5c; }
+    .nrm  { fill: #5c5c5c; }
+    .card { fill: #ffffff; }
+  </style>
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8c8c8c"/>
+    </marker>
+    <marker id="arg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6f9a7c"/>
+    </marker>
+    <marker id="aro" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b57a86"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#ffffff"/>
+
+  <!-- title -->
+  <text x="60" y="58" class="t">tiny-lm: a GPT, built from scratch</text>
+  <text x="60" y="88" class="st">A pre-LayerNorm, decoder-only transformer in PyTorch. This is the “web” model, the shape of GPT-2 small.</text>
+
+  <!-- ================= left: whole model, data flows upward ================= -->
+  <!-- input -->
+  <rect x="60" y="806" width="360" height="44" rx="8" fill="#f4f4f2" stroke="#c4c4bf"/>
+  <text x="240" y="834" class="b c">“Once upon a time”</text>
+  <text x="240" y="872" class="sm c">text → BPE tokeniser → token ids (at most 1,024)</text>
+  <line x1="240" y1="804" x2="240" y2="782" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- embeddings -->
+  <rect x="60" y="712" width="168" height="66" rx="8" fill="#e4eeef" stroke="#7fa6a9" stroke-width="1.5"/>
+  <text x="144" y="740" class="h c emb">Token embedding</text>
+  <text x="144" y="763" class="ms m c emb">16,384 × 768</text>
+  <text x="240" y="753" class="c" style="font-size:24px">+</text>
+  <rect x="252" y="712" width="168" height="66" rx="8" fill="#e4eeef" stroke="#7fa6a9" stroke-width="1.5"/>
+  <text x="336" y="740" class="h c emb">Position embedding</text>
+  <text x="336" y="763" class="ms m c emb">1,024 × 768</text>
+  <line x1="240" y1="708" x2="240" y2="690" stroke="#6f9a7c" stroke-width="3" marker-end="url(#arg)"/>
+
+  <!-- block stack (offset cards to say "repeated") -->
+  <rect x="80" y="330" width="360" height="352" rx="12" fill="#f4f6fa" stroke="#c9d0de"/>
+  <rect x="70" y="340" width="360" height="342" rx="12" fill="#f0f3f8" stroke="#bcc5d8"/>
+  <rect x="60" y="350" width="360" height="332" rx="12" fill="#e8edf5" stroke="#7d8fb3" stroke-width="2"/>
+  <text x="240" y="392" class="c" style="font-size:24px;font-weight:700">Transformer block</text>
+  <text x="240" y="440" class="c att" style="font-size:48px;font-weight:700">× 12</text>
+  <text x="240" y="484" class="b c" style="fill:#555">12 attention heads, 64 dims each</text>
+  <text x="240" y="510" class="b c" style="fill:#555">MLP widens 768 to 3,072 and back</text>
+  <text x="240" y="536" class="b c" style="fill:#555">GELU, no dropout</text>
+  <text x="240" y="562" class="b c" style="fill:#555">scaled init on the output projections</text>
+  <text x="240" y="608" class="b c res">The residual stream runs through</text>
+  <text x="240" y="632" class="b c res">every block: <tspan class="m ms">T × 768</tspan></text>
+  <line x1="240" y1="348" x2="240" y2="310" stroke="#6f9a7c" stroke-width="3" marker-end="url(#arg)"/>
+
+  <!-- final layernorm -->
+  <rect x="150" y="266" width="180" height="40" rx="8" fill="#efefed" stroke="#a9a9a4" stroke-width="1.5"/>
+  <text x="240" y="292" class="h c nrm">LayerNorm</text>
+  <line x1="240" y1="264" x2="240" y2="248" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- output layer -->
+  <rect x="60" y="186" width="360" height="58" rx="8" fill="#f4e7ea" stroke="#c99aa5" stroke-width="1.5"/>
+  <text x="240" y="211" class="h c out">Output layer: <tspan class="m ms">768 → 16,384</tspan></text>
+  <text x="240" y="233" class="sm c" style="fill:#8a5561">the same matrix as the token embedding</text>
+  <line x1="240" y1="184" x2="240" y2="168" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- softmax -->
+  <rect x="120" y="126" width="240" height="40" rx="8" fill="#f4f4f2" stroke="#c4c4bf"/>
+  <text x="240" y="152" class="b c">softmax: the next token</text>
+
+  <!-- tied weights -->
+  <path d="M60,745 H34 V215 H58" fill="none" stroke="#b57a86" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#aro)"/>
+  <text transform="translate(22,480) rotate(-90)" class="sm c out" style="font-style:italic">tied weights</text>
+
+  <!-- ================= right: zoom into one block ================= -->
+  <rect x="560" y="120" width="980" height="730" rx="16" fill="#fafaf8" stroke="#dcdcd6"/>
+  <text x="590" y="152" class="h" style="font-size:20px">Inside one block</text>
+  <text x="1510" y="152" class="sm e" style="font-style:italic">pre-LN: normalise, transform, add back</text>
+
+  <!-- zoom lines -->
+  <line x1="420" y1="350" x2="560" y2="126" stroke="#c4c4bf" stroke-dasharray="4 5"/>
+  <line x1="420" y1="682" x2="560" y2="846" stroke="#c4c4bf" stroke-dasharray="4 5"/>
+
+  <!-- residual stream -->
+  <line x1="620" y1="820" x2="620" y2="194" stroke="#6f9a7c" stroke-width="4"/>
+  <line x1="620" y1="196" x2="620" y2="172" stroke="#6f9a7c" stroke-width="4" marker-end="url(#arg)"/>
+  <text x="634" y="838" class="sm res"><tspan style="font-style:italic">x</tspan> in, <tspan class="m ms">T × 768</tspan></text>
+  <text x="640" y="182" class="sm res"><tspan style="font-style:italic">x</tspan> out</text>
+
+  <!-- attention branch -->
+  <path d="M620,790 H980" fill="none" stroke="#8c8c8c" stroke-width="2"/>
+  <rect x="980" y="770" width="200" height="40" rx="8" fill="#efefed" stroke="#a9a9a4" stroke-width="1.5"/>
+  <text x="1080" y="796" class="h c nrm">LayerNorm</text>
+  <line x1="1080" y1="768" x2="1080" y2="742" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="680" y="560" width="800" height="180" rx="12" fill="#eef1f7" stroke="#8d9dbf" stroke-width="1.5"/>
+  <text x="700" y="590" class="h att" style="font-size:18px">Causal self-attention: 12 heads</text>
+
+  <rect x="700" y="606" width="220" height="80" rx="8" class="card" stroke="#8d9dbf"/>
+  <text x="810" y="632" class="h c">Q, K, V</text>
+  <text x="810" y="654" class="ms m c att">Linear 768 → 2,304</text>
+  <text x="810" y="674" class="sm c">one matrix, all heads</text>
+  <line x1="922" y1="646" x2="948" y2="646" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="950" y="606" width="290" height="80" rx="8" class="card" stroke="#8d9dbf"/>
+  <text x="1095" y="632" class="h c">Attention, per head</text>
+  <text x="1095" y="654" class="ms m c att">softmax(Q Kᵀ / √64 + mask) V</text>
+  <text x="1095" y="674" class="sm c">each token sees only earlier tokens</text>
+  <line x1="1242" y1="646" x2="1268" y2="646" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="1270" y="606" width="190" height="80" rx="8" class="card" stroke="#8d9dbf"/>
+  <text x="1365" y="632" class="h c">Join heads</text>
+  <text x="1365" y="654" class="ms m c att">Linear 768 → 768</text>
+  <text x="1365" y="674" class="sm c">mix the heads</text>
+
+  <text x="700" y="722" class="sm" style="font-style:italic">In the playground: <tspan class="att" style="font-style:normal">Attention matrix</tspan>, <tspan class="att" style="font-style:normal">Head map</tspan> and switching off heads</text>
+
+  <path d="M1080,558 V520 H648" fill="none" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+  <circle cx="620" cy="520" r="16" fill="#ffffff" stroke="#6f9a7c" stroke-width="2.5"/>
+  <text x="620" y="528" class="c res" style="font-size:24px">+</text>
+
+  <!-- MLP branch -->
+  <path d="M620,470 H980" fill="none" stroke="#8c8c8c" stroke-width="2"/>
+  <rect x="980" y="450" width="200" height="40" rx="8" fill="#efefed" stroke="#a9a9a4" stroke-width="1.5"/>
+  <text x="1080" y="476" class="h c nrm">LayerNorm</text>
+  <line x1="1080" y1="448" x2="1080" y2="422" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="680" y="250" width="800" height="170" rx="12" fill="#f6f0e2" stroke="#c9ad74" stroke-width="1.5"/>
+  <text x="700" y="280" class="h mlp" style="font-size:18px">Feed-forward network (MLP)</text>
+
+  <rect x="700" y="296" width="220" height="80" rx="8" class="card" stroke="#c9ad74"/>
+  <text x="810" y="322" class="h c">Expand</text>
+  <text x="810" y="344" class="ms m c mlp">Linear 768 → 3,072</text>
+  <text x="810" y="364" class="sm c">four times the width</text>
+  <line x1="922" y1="336" x2="948" y2="336" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="950" y="296" width="290" height="80" rx="8" fill="#f1e2bf" stroke="#b8924a" stroke-width="2"/>
+  <text x="1095" y="322" class="h c">GELU</text>
+  <text x="1095" y="344" class="b c mlp">3,072 neurons fire here</text>
+  <text x="1095" y="364" class="sm c" style="fill:#6b5426">only a few percent are on at a time</text>
+  <line x1="1242" y1="336" x2="1268" y2="336" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+
+  <rect x="1270" y="296" width="190" height="80" rx="8" class="card" stroke="#c9ad74"/>
+  <text x="1365" y="322" class="h c">Compress</text>
+  <text x="1365" y="344" class="ms m c mlp">Linear 3,072 → 768</text>
+  <text x="1365" y="364" class="sm c">back to the stream</text>
+
+  <text x="700" y="408" class="sm" style="font-style:italic">In the playground: the <tspan class="mlp" style="font-style:normal">Neurons</tspan> heatmap</text>
+
+  <path d="M1080,248 V210 H648" fill="none" stroke="#8c8c8c" stroke-width="2" marker-end="url(#ar)"/>
+  <circle cx="620" cy="210" r="16" fill="#ffffff" stroke="#6f9a7c" stroke-width="2.5"/>
+  <text x="620" y="218" class="c res" style="font-size:24px">+</text>
+
+  <!-- footer -->
+  <text x="1540" y="878" class="b e" style="fill:#6b6b6b"><tspan style="font-weight:700;fill:#2f2f2f">98.4M</tspan> parameters · 1,024-token context · 16,384-token vocabulary · 12 layers · width 768</text>
+</svg>
