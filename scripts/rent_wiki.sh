@@ -11,6 +11,7 @@
 #   nohup scripts/rent_wiki.sh > logs/web/rent.log 2>&1 < /dev/null &
 #   tail -f logs/web/rent_status.txt              # one line per step: ok, FAILED or skipped
 #
+# The data steps can start while the models upload: the model steps wait for them.
 # Each step logs to logs/web/rent_<step>.log. A step whose output exists is skipped, so
 # after a problem, run the script again. A failed step doesn't stop the others.
 # Settings, as environment variables (the smoke test on the Mac makes them tiny):
@@ -69,7 +70,17 @@ step wiki_encode data/wiki_train.bin python -m web.wikipedia encode
 step dolly data/dolly-15k.jsonl \
     fetch $HF/databricks/databricks-dolly-15k/resolve/main/databricks-dolly-15k.jsonl data/dolly-15k.jsonl
 
+wait_for() {   # wait_for FILE...: until every file exists (rsync renames a file into place when complete)
+    local f
+    for f in "$@"; do
+        until [ -e "$f" ]; do
+            echo "$(date +%H:%M:%S) waiting for $f" >> "$STATUS"; sleep 30
+        done
+    done
+}
+
 # ---------- the Wikipedia anneal, and what it changed ----------
+wait_for $W/web_gpt_768w12l.pt $W/web_gpt_768w12l_anneal25.pt
 step probe_before "" python -m tools.knowledge $W/web_gpt_768w12l.pt --wiki-split --answers
 step anneal_wiki25 $W/web_gpt_768w12l_wiki25.pt \
     python -m web.anneal --data wiki --share 0.25 --tag wiki25 --tokens "$ANNEAL_TOKENS" $COMPILE $ANNEAL_EXTRA
@@ -86,6 +97,7 @@ step system_v2 $W/web_gpt_768w12l_anneal25_system_v2.pt \
     python -m web.system_sft --tag v2 --steps "$SYSTEM_STEPS" --accum $ACCUM --tests "$SFT_TESTS"
 
 if [ "$EXTRAS" = 1 ]; then
+    wait_for $W/web_gpt_768w12l_anneal.pt
     step anneal_wiki50 $W/web_gpt_768w12l_wiki50.pt \
         python -m web.anneal --data wiki --share 0.5 --tag wiki50 --tokens "$ANNEAL_TOKENS" $COMPILE $ANNEAL_EXTRA
     step probe_wiki50 "" python -m tools.knowledge $W/web_gpt_768w12l_wiki50.pt --wiki-split --answers
