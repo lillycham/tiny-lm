@@ -60,15 +60,36 @@ def test_identity_answers_follow_the_role():
     assert len(seen) == 4                       # all four cases come up
 
 def test_examples_mix(monkeypatch):
-    monkeypatch.setitem(ss.RULES, "shout", ss.Rule("Shout.", lambda a: a + "!!", lambda a: a.endswith("!!")))
-    rows = [{"instruction": f"Q{i}?", "context": "", "response": f"A{i}."} for i in range(200)]
+    monkeypatch.setitem(ss.RULES, "shout", ss.Rule(("Shout.", "Yell."), lambda a: a + "!!", lambda a: a.endswith("!!")))
+    rows = [{"instruction": f"Q{i}?", "context": "", "response": f"A{i}."} for i in range(400)]
     exs = ss.examples(rows, rules=["shout"])
-    ruled = [e for e in exs if e[0] == "Shout."]
-    identity = [e for e in exs if e[0] and e[0] != "Shout."]
-    assert len(exs) == 200 + len(identity)
-    assert 0.35 < len(ruled) / 200 < 0.65 and all(a.endswith("!!") for *_, a in ruled)
-    assert abs(len(identity) / len(exs) - 0.15) < 0.01
-    assert ss.examples(rows, rules=["shout"]) == exs                  # the same every time
+    who = set(ss.WHO_YOU + ss.WHO_ME)
+    identity = [e for e in exs if e[1] in who]
+    dolly = [e for e in exs if e[1] not in who]
+    ruled = [e for e in dolly if e[3].endswith("!!")]
+    plain = [e for e in dolly if not e[3].endswith("!!")]
+    assert len(dolly) == 400 and abs(len(identity) / len(exs) - 0.15) < 0.01
+    assert 0.4 < len(ruled) / 400 < 0.6
+    assert all(e[0].endswith("Shout.") for e in ruled)                  # the trained wording only
+    assert not any("Yell." in e[0] for e in exs)                        # the last wording is held out
+    named_plain = [e for e in plain if e[0]]
+    assert 0.2 < len(named_plain) / len(plain) < 0.4                    # names before ordinary questions
+    assert all(e[3] == e[1].replace("Q", "A").replace("?", ".") for e in plain)   # answered as usual
+    assert any(e[0] != "Shout." for e in ruled)                         # names with rules too
+    assert any(e[0].endswith("Shout.") for e in identity)               # and rules on identity answers
+    assert ss.examples(rows, rules=["shout"]) == exs                    # the same every time
+
+def test_every_rule_has_a_held_out_wording():
+    for name, rule in ss.RULES.items():
+        assert len(rule.systems) >= (3 if name in ss.TRAIN_RULES else 2), name
+
+def test_new_rule_examples():
+    r = ss.RULES
+    assert r["exclaim"].apply("One. Two? Three") == "One! Two! Three!"
+    assert r["numbered"].apply("One. Two.") == "1. One.\n2. Two."
+    assert not r["numbered"].check("2. One.\n1. Two.")
+    assert r["hope"].apply("Tope \n") == "Tope Hope this helps!"
+    assert r["in short"].apply("Camels use fat.") == "In short, camels use fat."
 
 def test_dataset_learns_only_the_answer():
     tok = WordBPE.train(["System: Shout. User: Q? Assistant: A!!"] * 5, 270)
