@@ -12,3 +12,4 @@ data/*.jsonl
 .DS_Store
 data/*.json
 data/wikipedia/
+logs/
