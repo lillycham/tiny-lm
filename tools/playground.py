@@ -153,8 +153,8 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None)
     """Yield one dict per new token, up to n tokens, ending early at <|endoftext|>.
 
     Each dict has the token's id, its piece, "text" (the new characters it completes:
-    empty while a character is still half made), its probability p, and the top
-    alternatives. p is the model's own probability, at temperature 1, whatever the
+    empty while a character is still half made), its probability p, the entropy H of
+    the whole distribution (in nats: 0 = certain), and the top alternatives. p is the model's own probability, at temperature 1, whatever the
     temperature used to choose. Temperature 0 always takes the most likely token.
     """
     lock = lock or threading.RLock()
@@ -174,10 +174,15 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None)
             nxt = logits.argmax().item()
         top_p, top_i = p.topk(top)
         yield {"id": nxt, "piece": piece(tok, nxt), "text": text.decode(token_bytes(tok, nxt)),
-               "p": p[nxt].item(), "top": [[piece(tok, i), q] for i, q in zip(top_i.tolist(), top_p.tolist())]}
+               "p": p[nxt].item(), "H": entropy(p),
+               "top": [[piece(tok, i), q] for i, q in zip(top_i.tolist(), top_p.tolist())]}
         if nxt == tok.eot_id:
             return
         ids.append(nxt)
+
+def entropy(p):
+    """-sum p log p, in nats: 0 when one token has all the probability, ln(V) when all are equal."""
+    return -(p * p.clamp_min(1e-12).log()).sum().item()
 
 @torch.no_grad()
 def attention_from(model, ids, t, lock=None):
@@ -216,6 +221,145 @@ def attention_from(model, ids, t, lock=None):
                    for i in range(len(model.blocks))]
         free_cache(device)
     return start, weights
+
+# ---------- visualisations ----------
+# Each works on a window of the text, start to end, seen with the context before it,
+# up to the model's block of tokens. The page asks for a few dozen tokens: a whole
+# 1,024-token logit lens would be 13 x 1,024 x 16,384 logits, ~870 MB.
+
+def view(model, ids, start, end):
+    """(first position the model sees, start, end), checked: the window must end in ids,
+       and start no earlier than the block of tokens that ends at end."""
+    if not (0 < end <= len(ids)) or start >= end:
+        raise ValueError(f"No window {start}-{end} in {len(ids)} tokens")
+    first = max(0, end - model.block)
+    return first, max(start, first), end
+
+def query_key(module, x):
+    """A CausalSelfAttention's q and k, (B, H, T, hs), as its forward makes them."""
+    q, k, _ = module.qkv(x).split(x.shape[-1], dim=-1)
+    return module.split_heads(q), module.smear_keys(module.split_heads(k))
+
+def causal_weights_for(q, k, rows):
+    """Softmax attention weights of query positions rows (a slice of 0..T) against every
+    key: (B, H, len(rows), T). A key after its query gets 0."""
+    T = k.shape[-2]
+    scores = q[:, :, rows] @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
+    pos = torch.arange(T, device=q.device)
+    scores = scores.masked_fill(pos[None, :] > pos[rows][:, None], float("-inf"))
+    return F.softmax(scores, dim=-1)
+
+@torch.no_grad()
+def logit_lens(model, tok, ids, start, end, lock=None):
+    """What each layer would predict after each position start..end-1: the residual
+    stream there, through the final LayerNorm and output layer, as if the model stopped.
+
+    Returns (start, rows): one row per stream (0 = the embeddings, i = after block i),
+    each {"top": top pieces, "p": their probabilities, "next": the probability of the
+    token that really came next, or None at the last position}. The last row is the
+    model's own prediction.
+    """
+    lock = lock or threading.RLock()
+    first, start, end = view(model, ids, start, end)
+    device = next(model.parameters()).device
+    streams, handles = {}, []
+
+    def save(i):
+        def hook(module, inputs, output):
+            streams[i] = output[0, start - first:].detach()
+        return hook
+
+    with lock:
+        try:
+            handles.append(model.drop.register_forward_hook(save(0)))
+            handles += [b.register_forward_hook(save(i + 1)) for i, b in enumerate(model.blocks)]
+            model(torch.tensor([ids[first:end]], device=device), last_only=True)
+        finally:
+            for h in handles:
+                h.remove()
+        nxt = ids[start + 1:end + 1]
+        rows = []
+        for i in range(len(model.blocks) + 1):
+            p = F.softmax(model.out(model.ln(streams[i])).float(), dim=-1)      # (W, V)
+            top_p, top_i = p.max(dim=-1)
+            rows.append({"top": [piece(tok, j) for j in top_i.tolist()], "p": [round(x, 4) for x in top_p.tolist()],
+                         "next": [round(p[j, n].item(), 4) for j, n in enumerate(nxt)] + [None] * (end - start - len(nxt))})
+        free_cache(device)
+    return start, rows
+
+@torch.no_grad()
+def attention_matrix(model, ids, layer, head, start, end, lock=None):
+    """One head's attention weights among positions start..end-1: (start, matrix, outside),
+    matrix[r][c] the weight from start + r to start + c, and outside[r] the weight row r
+    gives to earlier tokens outside the window."""
+    lock = lock or threading.RLock()
+    if not (0 <= layer < len(model.blocks) and 0 <= head < model.blocks[layer].attn.n_head):
+        raise ValueError(f"No layer {layer} head {head}")
+    first, start, end = view(model, ids, start, end)
+    device = next(model.parameters()).device
+    got = {}
+
+    def hook(module, inputs, output):
+        q, k = query_key(module, inputs[0])
+        got["w"] = causal_weights_for(q[:, head:head + 1], k[:, head:head + 1], slice(start - first, None))[0, 0]
+
+    with lock:
+        h = model.blocks[layer].attn.register_forward_hook(hook)
+        try:
+            model(torch.tensor([ids[first:end]], device=device), last_only=True)
+        finally:
+            h.remove()
+        w = got["w"]                                                          # (W, T)
+        inside = w[:, start - first:]
+        matrix = [[round(x, 4) for x in row] for row in inside.tolist()]
+        outside = [round(x, 4) for x in (1 - inside.sum(dim=-1)).clamp_min(0).tolist()]
+        free_cache(device)
+    return start, matrix, outside
+
+@torch.no_grad()
+def head_map(model, ids, window=256, lock=None):
+    """Each head's typical behaviour on the last window tokens, as (layers, heads) grids:
+    prev: mean attention to the token just before; first: to the first token in view (the
+    attention sink); induction: where the token appeared earlier, to the token that came
+    after that earlier copy (None if no token repeats). Returns (offset, grids, repeats)."""
+    lock = lock or threading.RLock()
+    offset = max(0, len(ids) - min(window, model.block))
+    x = ids[offset:]
+    if len(x) < 2:
+        raise ValueError("The head map needs at least 2 tokens")
+    # For each position t, the token after the last earlier copy of x[t], if any.
+    last, after = {}, []
+    for t, token in enumerate(x):
+        after.append(last[token] + 1 if token in last and last[token] + 1 < t else None)
+        last[token] = t
+    rep_t = [t for t, a in enumerate(after) if a is not None]
+    device = next(model.parameters()).device
+    grids = {"prev": [], "first": [], "induction": []}
+    handles = []
+
+    def hook(module, inputs, output):
+        q, k = query_key(module, inputs[0])
+        w = causal_weights_for(q, k, slice(None))[0]                            # (H, T, T)
+        t = torch.arange(1, w.shape[-1], device=w.device)
+        grids["prev"].append(w[:, t, t - 1].mean(dim=-1).tolist())
+        grids["first"].append(w[:, t, 0].mean(dim=-1).tolist())
+        if rep_t:
+            rt = torch.tensor(rep_t, device=w.device)
+            at = torch.tensor([after[i] for i in rep_t], device=w.device)
+            grids["induction"].append(w[:, rt, at].mean(dim=-1).tolist())
+        else:
+            grids["induction"].append([None] * w.shape[0])
+
+    with lock:
+        try:
+            handles = [b.attn.register_forward_hook(hook) for b in model.blocks]
+            model(torch.tensor([x], device=device), last_only=True)
+        finally:
+            for h in handles:
+                h.remove()
+        free_cache(device)
+    rounded = {k: [[None if v is None else round(v, 4) for v in row] for row in g] for k, g in grids.items()}
+    return offset, rounded, len(rep_t)
 
 # ---------- the server ----------
 class Handler(BaseHTTPRequestHandler):
@@ -259,6 +403,18 @@ class Handler(BaseHTTPRequestHandler):
                 model = self.models.get(req["model"])
                 offset, weights = attention_from(model, [int(i) for i in req["ids"]], int(req["t"]), self.models.lock)
                 return self.send_json({"offset": offset, "weights": weights})
+            if self.path in ("/api/lens", "/api/matrix", "/api/headmap"):
+                model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
+                ids = [int(i) for i in req["ids"]]
+                if self.path == "/api/lens":
+                    start, rows = logit_lens(model, tok, ids, int(req["start"]), int(req["end"]), self.models.lock)
+                    return self.send_json({"start": start, "rows": rows})
+                if self.path == "/api/matrix":
+                    start, matrix, outside = attention_matrix(model, ids, int(req["layer"]), int(req["head"]),
+                                                              int(req["start"]), int(req["end"]), self.models.lock)
+                    return self.send_json({"start": start, "matrix": matrix, "outside": outside})
+                offset, grids, repeats = head_map(model, ids, lock=self.models.lock)
+                return self.send_json({"offset": offset, **grids, "repeats": repeats})
             self.send_json({"error": "not found"}, 404)
         except (ValueError, KeyError, TypeError) as e:
             self.send_json({"error": str(e)}, 400)
@@ -287,6 +443,7 @@ class Handler(BaseHTTPRequestHandler):
             write({"type": "start", "prompt": prompt, "prompt_ids": prompt_ids,
                    "prompt_pieces": [piece(tok, i) for i in prompt_ids],
                    "params": sum(p.numel() for p in model.parameters()),
+                   "layers": c["layers"], "heads": c["heads"],
                    "shape": f"{c['layers']} layers x {c['heads']} heads, width {c['emb']}"
                             + (", smeared keys" if c.get("smear") else "")})
             t, count, reason = time.time(), 0, "length"

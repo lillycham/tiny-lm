@@ -4,6 +4,7 @@ The HTTP tests start a real server on a free port, with a tiny model in a tempor
 checkpoints folder, so they run in a second or two on the CPU.
 """
 import json
+import math
 import threading
 import urllib.error
 import urllib.request
@@ -242,3 +243,58 @@ def test_only_the_two_most_recent_models_stay_loaded(tmp_path):
     assert models.get("stories_gpt_a.pt") is a          # used again, so the most recent
     models.get("stories_gpt_c.pt")                       # b is dropped, not a
     assert [p.name for p in models.cache] == ["stories_gpt_a.pt", "stories_gpt_c.pt"]
+
+# ---------- visualisations ----------
+@torch.no_grad()
+def test_entropy_runs_from_certain_to_uniform():
+    assert pg.entropy(torch.tensor([1.0, 0.0, 0.0])) == pytest.approx(0, abs=1e-6)
+    assert pg.entropy(torch.full((8,), 1 / 8)) == pytest.approx(math.log(8))
+
+@torch.no_grad()
+def test_logit_lens_last_row_is_the_models_prediction(tok):
+    model, ids = tiny(), [5, 9, 2, 7, 7, 1, 3, 8]
+    start, rows = pg.logit_lens(model, tok, ids, 2, len(ids))
+    assert start == 2 and len(rows) == len(model.blocks) + 1
+    p = torch.softmax(model(torch.tensor([ids]))[0], dim=-1)
+    for j, t in enumerate(range(2, len(ids))):
+        assert rows[-1]["top"][j] == pg.piece(tok, p[t].argmax().item())
+        assert rows[-1]["p"][j] == pytest.approx(p[t].max().item(), abs=1e-3)
+    assert rows[-1]["next"][0] == pytest.approx(p[2, ids[3]].item(), abs=1e-3)
+    assert rows[0]["next"][-1] is None                      # nothing came after the last token
+
+@torch.no_grad()
+@pytest.mark.parametrize("smear", [False, True])
+def test_attention_matrix_matches_the_recorder(smear):
+    from tools.interp import Recorder
+    model, ids = tiny(smear=smear), [5, 9, 2, 7, 7, 1, 3]
+    with Recorder(model) as rec:
+        model(torch.tensor([ids]))
+    start, matrix, outside = pg.attention_matrix(model, ids, 1, 2, 0, len(ids))
+    assert torch.allclose(torch.tensor(matrix), rec.attn[1][0, 2], atol=1e-3)
+    assert max(outside) < 1e-3
+    start, matrix, outside = pg.attention_matrix(model, ids, 1, 2, 3, len(ids))       # a window
+    assert start == 3 and len(matrix) == len(matrix[0]) == 4
+    for row, out in zip(matrix, outside):
+        assert sum(row) + out == pytest.approx(1, abs=1e-3)
+
+@torch.no_grad()
+def test_head_map_grids():
+    model = tiny()
+    offset, grids, repeats = pg.head_map(model, [5, 9, 2, 7, 5, 9, 2, 7])
+    assert offset == 0 and repeats == 4                     # the whole second copy: 5 9 2 7
+    for g in grids.values():
+        assert len(g) == len(model.blocks) and len(g[0]) == model.blocks[0].attn.n_head
+        assert all(0 <= v <= 1 for row in g for v in row)
+    _, grids, repeats = pg.head_map(model, [1, 2, 3, 4])
+    assert repeats == 0 and grids["induction"][0][0] is None
+
+def test_visualisation_endpoints(server):
+    base = {"model": "stories_gpt_tiny.pt", "ids": [1, 2, 3, 1, 2, 3, 4]}
+    lens = json.loads(call(server + "/api/lens", {**base, "start": 2, "end": 7}))
+    assert lens["start"] == 2 and len(lens["rows"][0]["top"]) == 5
+    m = json.loads(call(server + "/api/matrix", {**base, "layer": 0, "head": 1, "start": 0, "end": 7}))
+    assert len(m["matrix"]) == 7
+    hm = json.loads(call(server + "/api/headmap", base))
+    assert set(hm) == {"offset", "prev", "first", "induction", "repeats"}
+    with pytest.raises(urllib.error.HTTPError):
+        call(server + "/api/matrix", {**base, "layer": 9, "head": 0, "start": 0, "end": 7})

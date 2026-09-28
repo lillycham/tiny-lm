@@ -107,6 +107,34 @@
   .composer details { margin: 6px 0; font-size: 13px; color: var(--muted); }
   .composer .actions { justify-content: flex-end; }
 
+  /* Visualisations: one panel under a card's text. Colours: one hue (--attn), light to dark. */
+  .vizbar { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
+  .vizbar .link.on { text-decoration: underline; text-underline-offset: 3px; }
+  .viz { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; overflow-x: auto; }
+  .viz h4 { font-size: 13px; font-weight: 600; margin: 0 0 2px; }
+  .viz .sub { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .viz svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .viz svg text { fill: var(--muted); font: 10px var(--mono); }
+  .viz svg .grid { stroke: var(--border); stroke-width: 1; }
+  .viz svg .line { fill: none; stroke: var(--attn); stroke-width: 2; stroke-linejoin: round; }
+  .viz svg .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  .viz svg .dot { fill: var(--attn); stroke: var(--panel); stroke-width: 2; }
+  .lens { border-collapse: separate; border-spacing: 2px; font: 11px var(--mono); }
+  .lens th { color: var(--muted); font-weight: normal; padding: 1px 3px; white-space: nowrap; }
+  .lens th.row { text-align: right; }
+  .lens td { padding: 1px 3px; white-space: nowrap; max-width: 64px; overflow: hidden; text-overflow: ellipsis;
+    border-radius: 3px; background: color-mix(in oklab, var(--attn) calc(var(--p, 0) * 80%), transparent); }
+  .lens td.hit { outline: 1.5px solid var(--text); outline-offset: -1.5px; }
+  .pickers { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
+  .viz canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
+  .hm { display: flex; flex-wrap: wrap; gap: 14px 22px; }
+  .hm .g { display: grid; gap: 2px; font: 10px var(--mono); }
+  .hm .g .lab { color: var(--muted); display: flex; align-items: center; justify-content: center; }
+  .hm .g button { width: 26px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: 3px;
+    font: 9px var(--mono); color: var(--text); cursor: pointer;
+    background: color-mix(in oklab, var(--attn) calc(var(--w, 0) * 85%), var(--panel)); }
+  .hm .g button:disabled { cursor: default; opacity: .4; }
+
   #tip { position: fixed; z-index: 10; pointer-events: none; background: var(--panel); color: var(--text);
     border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: 12px/1.5 var(--mono);
     box-shadow: 0 4px 16px rgba(0,0,0,.18); min-width: 180px; }
@@ -308,12 +336,18 @@ function newCard(model, parent = $("cards"), label = "") {
   el.className = "panel card";
   el.innerHTML = `<div class="card-head"><span class="name"></span><span class="meta"></span>
     <span class="status">starting…</span></div><div class="request hidden tokens"></div>
-    <div class="answer tokens"></div><div class="attn hidden"></div>`;
+    <div class="answer tokens"></div><div class="attn hidden"></div>
+    <div class="vizbar"><button class="link" data-viz="conf">Confidence</button>
+      <button class="link" data-viz="lens">Logit lens</button>
+      <button class="link" data-viz="matrix">Attention matrix</button>
+      <button class="link" data-viz="heads">Head map</button></div>
+    <div class="viz hidden"></div>`;
   el.querySelector(".name").textContent = model + label;
   parent.append(el);
   const card = { el, model, ids: [], tokens: [], head: null };
   cardData.set(el, card);
   el.querySelector(".request").onclick = el.querySelector(".answer").onclick = e => clickToken(card, e);
+  el.querySelector(".vizbar").onclick = e => { if (e.target.dataset.viz) showViz(card, e.target.dataset.viz); };
   return card;
 }
 
@@ -339,6 +373,7 @@ async function run(card, req) {
         buf = buf.slice(nl + 1);
         if (msg.type === "start") {
           card.el.querySelector(".meta").textContent = `${fmtParams(msg.params)} params, ${msg.shape}`;
+          card.layers = msg.layers; card.heads = msg.heads;
           const chat = req.mode !== "story";
           card.el.querySelector(".request").classList.toggle("hidden", !chat);
           msg.prompt_ids.forEach((id, i) => {
@@ -432,6 +467,7 @@ function showPiece(s) { s.textContent = $("tokenView").checked ? s.dataset.piece
 const tip = $("tip");
 let tipFor = null;
 document.addEventListener("mousemove", e => {
+  if (e.target.closest(".viz")) return;             // the charts show their own tooltips
   const s = e.target.closest(".tokens span");
   const card = s && s.closest(".card");
   const t = card && cardData.get(card).tokens[+s.dataset.index];
@@ -521,6 +557,191 @@ function clearAttention(el) {
   el.classList.remove("attn-on");
   el.querySelector(".attn").classList.add("hidden");
   for (const s of el.querySelectorAll(".tokens span")) s.classList.remove("from", "out");
+}
+
+// ---------- visualisations ----------
+async function post(path, body) {
+  const res = await fetch(path, { method: "POST", body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error);
+  return data;
+}
+const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const short = (piece, n = 8) => { const v = vis(piece); return v.length > n ? v.slice(0, n - 1) + "…" : v; };
+
+function showTip(html, e) {
+  tip.innerHTML = html;
+  tip.classList.remove("hidden");
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px";
+  tip.style.top = (e.clientY + 16 + tip.offsetHeight > innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 16) + "px";
+}
+const hideTip = () => tip.classList.add("hidden");
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+async function showViz(card, kind, opts = {}) {
+  if (running.length || !card.ids.length) return;
+  const panel = card.el.querySelector(".viz");
+  const bar = card.el.querySelector(".vizbar");
+  if (card.viz === kind && !opts.keep) {                         // clicking the open one closes it
+    card.viz = null; panel.classList.add("hidden");
+    for (const b of bar.children) b.classList.remove("on");
+    return;
+  }
+  card.viz = kind;
+  for (const b of bar.children) b.classList.toggle("on", b.dataset.viz === kind);
+  panel.classList.remove("hidden");
+  panel.innerHTML = `<div class="hint">working…</div>`;
+  try {
+    if (kind === "conf") confidence(card, panel);
+    else if (kind === "lens") await lens(card, panel);
+    else if (kind === "matrix") await matrix(card, panel, opts);
+    else await headMap(card, panel);
+  } catch (e) {
+    panel.innerHTML = `<div class="error"></div>`;
+    panel.querySelector(".error").textContent = "Error: " + e.message;
+  }
+}
+
+// Two small charts, not one with two y-axes: probability (0-1) and entropy (nats)
+// are different measures. They share the x-axis: the generated tokens.
+function confidence(card, panel) {
+  const gen = card.tokens.map((t, i) => ({ ...t, i })).filter(t => !t.prompt);
+  if (!gen.length) { panel.innerHTML = `<div class="hint">No generated tokens yet.</div>`; return; }
+  const maxH = Math.max(1, Math.ceil(Math.max(...gen.map(t => t.H ?? 0))));
+  panel.innerHTML = `<h4>Probability of each chosen token</h4><div class="sub">1 = certain. Dips are guesses.</div>
+    <div class="c1"></div><h4 style="margin-top:12px">Uncertainty (entropy, nats)</h4>
+    <div class="sub">0 = one choice had all the probability; ${Math.log(16384).toFixed(1)} would be all 16,384 tokens alike.</div>
+    <div class="c2"></div>`;
+  const W = 640, H = 90, L = 34, R = 8, T = 6, B = 16;
+  const x = i => L + (gen.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (gen.length - 1));
+  const draw = (el, values, top, ticks) => {
+    const y = v => T + (1 - v / top) * (H - T - B);
+    const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}">
+      ${ticks.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>
+        <text x="${L - 6}" y="${y(v) + 3}" text-anchor="end">${v}</text>`).join("")}
+      <text x="${L}" y="${H - 3}">token 1</text><text x="${W - R}" y="${H - 3}" text-anchor="end">token ${values.length}</text>
+      <polyline class="line" points="${pts}"/>
+      <line class="cross" y1="${T}" y2="${H - B}" visibility="hidden"/><circle class="dot" r="4" visibility="hidden"/>
+      <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent"/></svg>`;
+    return y;
+  };
+  const yP = draw(panel.querySelector(".c1"), gen.map(t => t.p), 1, [0, 0.5, 1]);
+  const yH = draw(panel.querySelector(".c2"), gen.map(t => t.H ?? 0), maxH, [0, maxH / 2, maxH]);
+  // One crosshair across both charts; the tooltip names the token and both values.
+  for (const [el, y, key] of [[panel.querySelector(".c1"), yP, "p"], [panel.querySelector(".c2"), yH, "H"]]) {
+    const svg = el.querySelector("svg");
+    svg.querySelector("rect").onmousemove = e => {
+      const r = svg.getBoundingClientRect();
+      const px = (e.clientX - r.left) * W / r.width;
+      const i = Math.max(0, Math.min(gen.length - 1, Math.round((px - L) / ((W - L - R) / Math.max(1, gen.length - 1)))));
+      for (const [s2, y2, k2] of [[panel.querySelector(".c1 svg"), yP, "p"], [panel.querySelector(".c2 svg"), yH, "H"]]) {
+        const c = s2.querySelector(".cross"), d = s2.querySelector(".dot");
+        c.setAttribute("x1", x(i)); c.setAttribute("x2", x(i)); c.setAttribute("visibility", "visible");
+        d.setAttribute("cx", x(i)); d.setAttribute("cy", y2(gen[i][k2] ?? 0)); d.setAttribute("visibility", "visible");
+      }
+      const t = gen[i];
+      showTip(`<div><b>${esc(JSON.stringify(t.piece))}</b> (token ${i + 1})</div>
+        <div>p = ${t.p.toFixed(3)}</div><div>entropy = ${(t.H ?? 0).toFixed(2)} nats</div>`, e);
+    };
+    svg.querySelector("rect").onmouseleave = () => {
+      hideTip();
+      for (const s2 of panel.querySelectorAll("svg")) for (const m of s2.querySelectorAll(".cross, .dot")) m.setAttribute("visibility", "hidden");
+    };
+  }
+}
+
+async function lens(card, panel) {
+  const n = card.ids.length, start = Math.max(0, n - 40);
+  const data = await post("/api/lens", { model: card.model, ids: card.ids, start, end: n });
+  const rows = data.rows, s = data.start, W = rows[0].top.length;
+  const name = i => i === 0 ? "embed" : i === rows.length - 1 ? `L${i - 1} = out` : `L${i - 1}`;
+  let html = `<h4>Logit lens: what each layer would predict next</h4>
+    <div class="sub">Each column is a token in the text; each row, the residual stream after that layer, read
+    through the final LayerNorm and output layer. Shade = its probability. Outlined: the token that really came next.</div>
+    <table class="lens"><tr><th class="row">input →</th>`;
+  for (let j = 0; j < W; j++) html += `<th title="token ${s + j}">${esc(short(card.tokens[s + j].piece))}</th>`;
+  html += "</tr>";
+  for (let i = rows.length - 1; i >= 0; i--) {
+    html += `<tr><th class="row">${name(i)}</th>`;
+    for (let j = 0; j < W; j++) {
+      const top = rows[i].top[j], p = rows[i].p[j], nx = rows[i].next[j];
+      const real = s + j + 1 < card.tokens.length ? card.tokens[s + j + 1].piece : null;
+      const title = `${name(i)}, after ${JSON.stringify(card.tokens[s + j].piece)}: ${JSON.stringify(top)} ${p.toFixed(3)}` +
+        (real === null ? "" : `\nthe real next token ${JSON.stringify(real)}: ${nx.toFixed(3)}`);
+      html += `<td class="${top === real ? "hit" : ""}" style="--p:${p}" title="${esc(title)}">${esc(short(top))}</td>`;
+    }
+    html += "</tr>";
+  }
+  panel.innerHTML = html + "</table>";
+}
+
+async function matrix(card, panel, opts) {
+  const L = card.layers || 1, H = card.heads || 1;
+  const [layer, head] = opts.head || card.head || [0, 0];
+  const n = card.ids.length, start = Math.max(0, n - 64);
+  const data = await post("/api/matrix", { model: card.model, ids: card.ids, layer, head, start, end: n });
+  const m = data.matrix, s = data.start, W = m.length, cell = Math.max(4, Math.min(14, Math.floor(620 / W)));
+  panel.innerHTML = `<h4>Attention matrix: layer ${layer} head ${head}</h4>
+    <div class="sub">Row: the token looking (the query). Column: the token it looks at. Shade = weight.
+    A line just below the diagonal is a previous-token head; a stripe off the diagonal on repeated text is an induction head.</div>
+    <div class="pickers"><label>Layer <select class="pl">${Array.from({ length: L }, (_, i) => `<option ${i === layer ? "selected" : ""}>${i}</option>`).join("")}</select></label>
+    <label>Head <select class="ph">${Array.from({ length: H }, (_, i) => `<option ${i === head ? "selected" : ""}>${i}</option>`).join("")}</select></label>
+    <span class="hint">last ${W} tokens</span></div><canvas></canvas>`;
+  const go = () => showViz(card, "matrix", { keep: true, head: [+panel.querySelector(".pl").value, +panel.querySelector(".ph").value] });
+  panel.querySelector(".pl").onchange = panel.querySelector(".ph").onchange = go;
+  const cv = panel.querySelector("canvas"), dpr = devicePixelRatio || 1;
+  cv.width = W * cell * dpr; cv.height = W * cell * dpr;
+  cv.style.width = W * cell + "px"; cv.style.height = W * cell + "px";
+  const g = cv.getContext("2d");
+  g.scale(dpr, dpr);
+  g.fillStyle = cssVar("--bg"); g.fillRect(0, 0, W * cell, W * cell);
+  g.fillStyle = cssVar("--attn");
+  for (let r = 0; r < W; r++) for (let c = 0; c <= r; c++) {
+    g.globalAlpha = Math.min(1, m[r][c] * 0.9 + (m[r][c] > 0 ? 0.04 : 0));
+    g.fillRect(c * cell, r * cell, cell - (cell > 6 ? 1 : 0), cell - (cell > 6 ? 1 : 0));
+  }
+  g.globalAlpha = 1;
+  cv.onmousemove = e => {
+    const rct = cv.getBoundingClientRect();
+    const r = Math.floor((e.clientY - rct.top) / cell), c = Math.floor((e.clientX - rct.left) / cell);
+    if (r < 0 || r >= W || c < 0 || c >= W) return hideTip();
+    const from = card.tokens[s + r].piece, to = card.tokens[s + c].piece;
+    showTip(`<div>from <b>${esc(JSON.stringify(from))}</b> (token ${s + r})</div>
+      <div>to <b>${esc(JSON.stringify(to))}</b> (token ${s + c})</div>
+      <div>${c > r ? "after it: not visible" : "weight " + m[r][c].toFixed(3)}</div>
+      ${data.outside[r] > 0.001 ? `<div>+${data.outside[r].toFixed(3)} to tokens before the window</div>` : ""}`, e);
+  };
+  cv.onmouseleave = hideTip;
+}
+
+async function headMap(card, panel) {
+  const data = await post("/api/headmap", { model: card.model, ids: card.ids });
+  const L = data.prev.length, H = data.prev[0].length;
+  const part = (title, sub, grid) => {
+    let html = `<div><h4>${title}</h4><div class="sub">${sub}</div>
+      <div class="g" style="grid-template-columns: auto repeat(${H}, 26px)"><div class="lab"></div>`;
+    for (let h = 0; h < H; h++) html += `<div class="lab">H${h}</div>`;
+    for (let l = 0; l < L; l++) {
+      html += `<div class="lab">L${l}</div>`;
+      for (let h = 0; h < H; h++) {
+        const v = grid[l][h];
+        html += v === null ? `<button disabled>–</button>`
+          : `<button style="--w:${v}" data-l="${l}" data-h="${h}" title="layer ${l} head ${h}: ${v.toFixed(3)}. Click for its attention matrix">${v.toFixed(2).replace(/^0/, "")}</button>`;
+      }
+    }
+    return html + "</div></div>";
+  };
+  panel.innerHTML = `<h4>Head map: what each head does on this text</h4>
+    <div class="sub">Mean attention weight, on the last ${card.ids.length - data.offset} tokens. Click a head to see its attention matrix.</div>
+    <div class="hm">${part("Previous token", "to the token just before", data.prev)}
+    ${part("First token", "to the first token in view: the attention sink", data.first)}
+    ${part("Induction", data.repeats ? `on the ${data.repeats} tokens that repeat: to what followed the earlier copy` :
+      "no token repeats in view", data.induction)}</div>`;
+  panel.querySelector(".hm").onclick = e => {
+    const b = e.target.closest("button[data-l]");
+    if (b) { card.head = [+b.dataset.l, +b.dataset.h]; showViz(card, "matrix", { keep: true, head: card.head }); }
+  };
 }
 
 init();

@@ -188,7 +188,11 @@ python -m tools.playground             # then open http://localhost:8000
 ```
 
 Pick any story or web model or snapshot, and a story, name, instruct or chat
-request. The chat tab is a conversation, with an optional system prompt. Tick
+request. The chat tab is a conversation, with an optional system prompt. Under each
+reply: **Confidence** (each token's probability and entropy), **Logit lens** (what each
+layer would predict), **Attention matrix** (one head, token by token) and **Head map**
+(which heads attend to the previous token, the first token, or like induction heads).
+Samples runs one request with several random seeds. Tick
 "Compare with" to run two models on the same request and seed. "Show tokens"
 colours each token by how unlikely it was; hover one for its probability and the
 model's other choices. Click a token to see where each head looked from it.
