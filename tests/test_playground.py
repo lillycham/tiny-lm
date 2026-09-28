@@ -34,7 +34,7 @@ class Fixed(nn.Module):
         self.w = nn.Parameter(torch.zeros(1))
         self.plan, self.start = plan, start
 
-    def forward(self, x):
+    def forward(self, x, last_only=False):
         logits = torch.full((1, x.shape[1], VOCAB_SIZE), -1e9)
         logits[0, -1, self.plan[x.shape[1] - self.start]] = 0
         return logits
@@ -212,3 +212,33 @@ def test_an_error_while_streaming_is_one_more_line(server, monkeypatch):
     lines = [json.loads(l) for l in call(server + "/api/generate", {"model": "stories_gpt_tiny.pt", "text": "Hi"}).splitlines()]
     assert [m["type"] for m in lines] == ["start", "token", "error"]
     assert "KeyError" in lines[-1]["error"]
+
+@torch.no_grad()
+@pytest.mark.parametrize("smear", [False, True])
+def test_attention_row_matches_the_full_recorder(smear):
+    """attention_from computes only the clicked token's row; it must equal that row of
+    interp.Recorder's full T x T maps."""
+    from tools.interp import Recorder
+    model, ids = tiny(smear=smear), [5, 9, 2, 7, 7, 1, 3]
+    offset, rows = pg.attention_from(model, ids, 4)
+    with Recorder(model) as rec:
+        model(torch.tensor([ids[:5]]))
+    for i in range(len(model.blocks)):
+        assert torch.allclose(torch.tensor(rows[i]), rec.attn[i][0, :, -1], atol=1e-4)
+    assert offset == 0
+
+@torch.no_grad()
+def test_last_only_logits_match_the_full_forward():
+    model = tiny()
+    X = torch.randint(0, VOCAB_SIZE, (2, 10))
+    assert torch.allclose(model(X, last_only=True), model(X)[:, -1:], atol=1e-6)
+
+def test_only_the_two_most_recent_models_stay_loaded(tmp_path):
+    for n in "abc":
+        gpt.save(tiny(), tmp_path / f"stories_gpt_{n}.pt")
+    models = pg.Models(tmp_path)
+    a = models.get("stories_gpt_a.pt")
+    models.get("stories_gpt_b.pt")
+    assert models.get("stories_gpt_a.pt") is a          # used again, so the most recent
+    models.get("stories_gpt_c.pt")                       # b is dropped, not a
+    assert [p.name for p in models.cache] == ["stories_gpt_a.pt", "stories_gpt_c.pt"]
