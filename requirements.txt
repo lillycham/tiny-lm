@@ -1,5 +1,5 @@
 # For machines without Nix, such as a rented GPU. On the Mac, use the flake instead.
-torch>=2.13
+torch>=2.4          # low, so pip keeps the rented machine's CUDA build of PyTorch
 numpy>=2
 pytest
 pyarrow
