@@ -72,14 +72,19 @@ use the one that pretraining built.
 A GPT-2 small shaped model on general English from the web, trained on one
 rented RTX 5090.
 
-| File              | What it does                                                                                                                                              |
-|-------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `web/web_data.py` | A 16,384-token tokeniser for FineWeb-Edu (4.20 characters per token), and parallel encoding of Parquet files into `uint16` token files, on every CPU core |
-| `web/web_gpt.py`  | The web model: 12 layers, width 768, 12 heads, 1,024 tokens of context, GPT-2's scaled init, gradient accumulation                                        |
-| `web/anneal.py`   | A short last stage of training on SimpleStories mixed with web text, as the learning rate falls                                                           |
-| `web/chat_sft.py` | Supervised fine-tuning on Dolly 15k: a general question-and-answer model                                                                                  |
+| File                 | What it does                                                                                                                                              |
+|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `web/web_data.py`    | A 16,384-token tokeniser for FineWeb-Edu (4.20 characters per token), and parallel encoding of Parquet files into `uint16` token files, on every CPU core |
+| `web/web_gpt.py`     | The web model: 12 layers, width 768, 12 heads, 1,024 tokens of context, GPT-2's scaled init, gradient accumulation                                        |
+| `web/anneal.py`      | A short last stage of training on SimpleStories mixed with web text, as the learning rate falls                                                           |
+| `web/chat_sft.py`    | Supervised fine-tuning on Dolly 15k: a general question-and-answer model                                                                                  |
+| `web/system_sft.py`  | Fine-tuning on a `System:` line: answer rules (one sentence, a list, quotes) and names for the model and the user                                         |
+| `web/wikipedia.py`   | Wikipedia's ~10,000 Level 4 Vital Articles, from a Hugging Face dump and the Wikipedia API, for an anneal                                                 |
+| `tools/knowledge.py` | A knowledge probe: category, birthplace and birth year of 38 famous people, scored by log-probability                                                     |
+| `tools/facts.py`     | Fact tests: how the prompt's form (a name split into rare tokens, the direction of a fact, the verb) changes the answer                                   |
 
-`instruct_sft.py`, `interp.py` and the playground also work with the web models.
+`instruct_sft.py`, `interp.py` and the playground also work with the web models. Run the web tools with
+`python -m tools.facts checkpoints/web/web_gpt_768w12l.pt`, for example.
 
 | Model                        | Parameters | Tokens seen | Val loss (nats/token) | Bits/char | Time on a 5090 |
 |------------------------------|-----------:|------------:|----------------------:|----------:|---------------:|
