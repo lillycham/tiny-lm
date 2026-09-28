@@ -162,6 +162,8 @@
         <span id="tempVal">0.80</span></label>
       <label>Max tokens <input type="number" id="maxTokens" value="300" min="1" max="1000"></label>
       <label>Seed <input type="number" id="seed" value="0"></label>
+      <label title="Run the same request this many times, each with a random seed (not in the chat tab)">Samples
+        <input type="number" id="samples" value="1" min="1" max="8"></label>
       <button class="btn ghost" id="dice" title="A random seed">Random seed</button>
       <label><input type="checkbox" id="tokenView"> Show tokens</label>
     </div>
@@ -248,7 +250,7 @@ $("tokenView").onchange = () => {
   for (const s of document.querySelectorAll(".tokens span")) showPiece(s);
 };
 $("go").onclick = generate;
-$("stop").onclick = $("stopChat").onclick = () => running.forEach(c => c.abort());
+$("stop").onclick = $("stopChat").onclick = () => { stopped = true; running.forEach(c => c.abort()); };
 $("send").onclick = send;
 $("newChat").onclick = () => {
   if (running.length) return;
@@ -275,25 +277,39 @@ function request() {
   };
 }
 
-function generate() {
-  if (running.length) return;
+// With Samples above 1: the same request with that many random seeds, one after
+// another (each model's card for a seed side by side). Stop ends the whole series.
+let stopped = false, generating = false;
+async function generate() {
+  if (running.length || generating) return;
   const names = [$("modelA").value];
   if ($("compare").checked) names.push($("modelB").value);
+  const n = Math.max(1, Math.min(8, Math.floor(+$("samples").value) || 1));
   const cards = $("cards");
   for (const el of cards.querySelectorAll(".card")) cardData.delete(el);
   cards.innerHTML = "";
   cards.classList.toggle("two", names.length === 2);
   const req = request();
-  for (const name of names) run(newCard(name), { ...req, model: name });
+  const seeds = n === 1 ? [req.seed] : Array.from({ length: n }, () => Math.floor(Math.random() * 1e6));
+  stopped = false; generating = true;
+  try {
+    for (const seed of seeds) {
+      if (stopped) break;
+      const label = n > 1 ? `  seed ${seed}` : "";
+      await Promise.all(names.map(name => run(newCard(name, cards, label), { ...req, model: name, seed })));
+    }
+  } finally {
+    generating = false;
+  }
 }
 
-function newCard(model, parent = $("cards")) {
+function newCard(model, parent = $("cards"), label = "") {
   const el = document.createElement("div");
   el.className = "panel card";
   el.innerHTML = `<div class="card-head"><span class="name"></span><span class="meta"></span>
     <span class="status">starting…</span></div><div class="request hidden tokens"></div>
     <div class="answer tokens"></div><div class="attn hidden"></div>`;
-  el.querySelector(".name").textContent = model;
+  el.querySelector(".name").textContent = model + label;
   parent.append(el);
   const card = { el, model, ids: [], tokens: [], head: null };
   cardData.set(el, card);
