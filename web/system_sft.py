@@ -210,22 +210,37 @@ def logprob(model, tok, prompt, answer):
     logp = F.log_softmax(model(ids[:, :-1]).float(), dim=-1)[0]
     return sum(logp[len(p) - 1 + j, a[j]].item() for j in range(len(a)))
 
+BINDING_CASES = [   # (system line, question, the answer with the name, the answer without)
+    ("You are {}.", "Who are you?", "I am {}.", "I don't have a name."),
+    ("The user is {}.", "Who are you?", "I am {}.", "I don't have a name."),
+    ("You are {}.", "Who am I?", "You are {}.", "I don't know your name."),
+    ("The user is {}.", "Who am I?", "You are {}.", "I don't know your name."),
+]
+
 def binding_test(model, tok, names=TEST_NAMES):
-    """log P of the name as the answer, mean over names, for each system line and question.
-    A model that binds names to roles scores "You are X" high for "Who are you?", and
-    "The user is X" high for "Who am I?". A copier scores both high for both."""
+    """For each system line and question: log P(the answer that gives the name) minus
+    log P(the "don't know" answer), as (system, question, name is right?, mean, std error)
+    over names. Above 0: the model gives the name.
+
+    A copier gives the name in all four cases. A model that binds names to roles gives
+    it only when the name belongs to the one asked about. Whole answers, because the
+    choice is made at their first token: once "I am" is given, the name is the only
+    sensible next word, whatever the model believes.
+    """
     rows = []
-    for question, prefix in [("Who are you?", "I am"), ("Who am I?", "You are")]:
-        for system in ["You are {}.", "The user is {}.", ""]:
-            s = [logprob(model, tok, chat_sft.conversation([], question, "", system.format(n)) + prefix, " " + n)
-                 for n in names]
-            rows.append((question, system.format("X") or "(none)", st.mean(s)))
+    for system, question, named, unknown in BINDING_CASES:
+        d = []
+        for n in names:
+            p = chat_sft.conversation([], question, "", system.format(n))
+            d.append(logprob(model, tok, p, named.format(n)) - logprob(model, tok, p, unknown))
+        right = system.startswith("You") == (question in WHO_YOU)
+        rows.append((system.format("X"), question, right, st.mean(d), st.stdev(d) / len(d) ** 0.5))
     return rows
 
 def show_binding_test(title, rows):
     print(title)
-    for question, system, score in rows:
-        print(f"   {question:13s} System: {system:16s} {score:7.2f}")
+    for system, question, right, mean, se in rows:
+        print(f"   System: {system:16s} {question:13s} {mean:+7.2f} +- {se:.2f}   (the name is {'right' if right else 'wrong'})")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -256,7 +271,7 @@ if __name__ == "__main__":
 
     before = gpt.load(args.device, BEFORE)
     show_rule_test(f"\n3. Before: {BEFORE.name} (the chat model)", rule_test(before, tok, questions))
-    show_binding_test("\n   Binding, log P of the name:", binding_test(before, tok))
+    show_binding_test("\n   Binding, log P(answer with the name) - log P(\"don't know\"):", binding_test(before, tok))
     del before
     if args.device == "mps":
         torch.mps.empty_cache()
@@ -265,5 +280,5 @@ if __name__ == "__main__":
     sft.fine_tune(model, X, Y, args.device, STEPS=args.steps, LR=args.lr, val=val, accum=args.accum)
     gpt.save(model, out)
     show_rule_test(f"\n4. After: {out.name}", rule_test(model, tok, questions))
-    show_binding_test("\n   Binding, log P of the name:", binding_test(model, tok))
+    show_binding_test("\n   Binding, log P(answer with the name) - log P(\"don't know\"):", binding_test(model, tok))
     print(f"\nSaved to {out}")
