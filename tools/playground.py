@@ -384,6 +384,43 @@ def head_map(model, ids, window=256, lock=None, ablate=()):
     rounded = {k: [[None if v is None else round(v, 4) for v in row] for row in g] for k, g in grids.items()}
     return offset, rounded, len(rep_t)
 
+@torch.no_grad()
+def neuron_map(model, ids, layer, start, end, lock=None, ablate=(), top=64, threshold=0.1):
+    """The feed-forward neurons of one layer on positions start..end-1: (start, active, index, acts).
+
+    active[i] is the share of layer i's neurons above threshold, averaged over the window
+    (for every layer). Of the layer asked for, only the top neurons with the highest peak
+    are kept: index[k] is a neuron's number, and acts[k][r] its activation at start + r.
+    interp.Recorder keeps every neuron: 4C of them at every position in every layer.
+    """
+    lock = lock or threading.RLock()
+    if not 0 <= layer < len(model.blocks):
+        raise ValueError(f"No layer {layer}")
+    first, start, end = view(model, ids, start, end)
+    device = next(model.parameters()).device
+    active, kept, handles = [], {}, []
+
+    def hook(i):
+        def hook(module, inputs, output):
+            a = output[0, start - first:]                                     # (W, 4C)
+            active.append((a > threshold).float().mean().item())
+            if i == layer:
+                kept["a"] = a.float()
+        return hook
+
+    with lock, ablated(model, ablate):
+        try:
+            handles = [b.ffwd.net[1].register_forward_hook(hook(i)) for i, b in enumerate(model.blocks)]
+            model(torch.tensor([ids[first:end]], device=device), last_only=True)
+        finally:
+            for h in handles:
+                h.remove()
+        a = kept["a"]
+        index = a.max(dim=0).values.topk(min(top, a.shape[1])).indices
+        acts = [[round(x, 3) for x in row] for row in a[:, index].t().tolist()]
+        free_cache(device)
+    return start, [round(x, 4) for x in active], index.tolist(), acts
+
 # ---------- the server ----------
 class Handler(BaseHTTPRequestHandler):
     models = None       # set by make_server
@@ -427,7 +464,7 @@ class Handler(BaseHTTPRequestHandler):
                 offset, weights = attention_from(model, [int(i) for i in req["ids"]], int(req["t"]), self.models.lock,
                                                  parse_heads(req.get("ablate"), model))
                 return self.send_json({"offset": offset, "weights": weights})
-            if self.path in ("/api/lens", "/api/matrix", "/api/headmap"):
+            if self.path in ("/api/lens", "/api/matrix", "/api/headmap", "/api/neurons"):
                 model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
                 ids, off = [int(i) for i in req["ids"]], parse_heads(req.get("ablate"), model)
                 if self.path == "/api/lens":
@@ -437,6 +474,10 @@ class Handler(BaseHTTPRequestHandler):
                     start, matrix, outside = attention_matrix(model, ids, int(req["layer"]), int(req["head"]),
                                                               int(req["start"]), int(req["end"]), self.models.lock, off)
                     return self.send_json({"start": start, "matrix": matrix, "outside": outside})
+                if self.path == "/api/neurons":
+                    start, active, index, acts = neuron_map(model, ids, int(req["layer"]), int(req["start"]),
+                                                            int(req["end"]), self.models.lock, off)
+                    return self.send_json({"start": start, "active": active, "index": index, "acts": acts})
                 offset, grids, repeats = head_map(model, ids, lock=self.models.lock, ablate=off)
                 return self.send_json({"offset": offset, **grids, "repeats": repeats})
             self.send_json({"error": "not found"}, 404)

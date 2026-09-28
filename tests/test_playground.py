@@ -288,6 +288,23 @@ def test_head_map_grids():
     _, grids, repeats = pg.head_map(model, [1, 2, 3, 4])
     assert repeats == 0 and grids["induction"][0][0] is None
 
+@torch.no_grad()
+def test_neuron_map_matches_the_recorder():
+    from tools.interp import Recorder
+    model, ids = tiny(), [5, 9, 2, 7, 7, 1, 3]
+    with Recorder(model) as rec:
+        model(torch.tensor([ids]))
+    assert rec.neurons[1].shape == (1, len(ids), 4 * 12)
+    start, active, index, acts = pg.neuron_map(model, ids, 1, 2, len(ids), top=5)
+    assert start == 2 and len(active) == len(model.blocks) and len(index) == 5
+    want = rec.neurons[1][0, 2:, index].t()
+    assert torch.allclose(torch.tensor(acts), want, atol=1e-3)
+    assert active[1] == pytest.approx((rec.neurons[1][0, 2:] > 0.1).float().mean().item(), abs=1e-3)
+    peaks = [max(row) for row in acts]
+    assert peaks == sorted(peaks, reverse=True)             # strongest first
+    with pytest.raises(ValueError):
+        pg.neuron_map(model, ids, 2, 0, len(ids))
+
 def test_visualisation_endpoints(server):
     base = {"model": "stories_gpt_tiny.pt", "ids": [1, 2, 3, 1, 2, 3, 4]}
     lens = json.loads(call(server + "/api/lens", {**base, "start": 2, "end": 7}))
@@ -296,8 +313,12 @@ def test_visualisation_endpoints(server):
     assert len(m["matrix"]) == 7
     hm = json.loads(call(server + "/api/headmap", base))
     assert set(hm) == {"offset", "prev", "first", "induction", "repeats"}
+    nm = json.loads(call(server + "/api/neurons", {**base, "layer": 1, "start": 2, "end": 7}))
+    assert nm["start"] == 2 and len(nm["acts"][0]) == 5 and len(nm["index"]) == len(nm["acts"])
     with pytest.raises(urllib.error.HTTPError):
         call(server + "/api/matrix", {**base, "layer": 9, "head": 0, "start": 0, "end": 7})
+    with pytest.raises(urllib.error.HTTPError):
+        call(server + "/api/neurons", {**base, "layer": 9, "start": 0, "end": 7})
 
 # ---------- ablation ----------
 def test_parse_heads_checks_the_model():

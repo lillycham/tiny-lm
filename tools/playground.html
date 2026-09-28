@@ -359,7 +359,8 @@ function newCard(model, parent = $("cards"), label = "") {
     <div class="vizbar"><button class="link" data-viz="conf">Confidence</button>
       <button class="link" data-viz="lens">Logit lens</button>
       <button class="link" data-viz="matrix">Attention matrix</button>
-      <button class="link" data-viz="heads">Head map</button></div>
+      <button class="link" data-viz="heads">Head map</button>
+      <button class="link" data-viz="neurons">Neurons</button></div>
     <div class="viz hidden"></div>`;
   el.querySelector(".name").textContent = model + label;
   parent.append(el);
@@ -615,6 +616,7 @@ async function showViz(card, kind, opts = {}) {
     if (kind === "conf") confidence(card, panel);
     else if (kind === "lens") await lens(card, panel);
     else if (kind === "matrix") await matrix(card, panel, opts);
+    else if (kind === "neurons") await neurons(card, panel, opts);
     else await headMap(card, panel);
   } catch (e) {
     panel.innerHTML = `<div class="error"></div>`;
@@ -768,6 +770,50 @@ async function headMap(card, panel) {
     if (e.shiftKey) { toggleHead(+b.dataset.l, +b.dataset.h); return; }
     card.head = [+b.dataset.l, +b.dataset.h]; showViz(card, "matrix", { keep: true, head: card.head });
   };
+}
+
+// Which feed-forward neurons fire on each token, in one layer. A layer has 4x the model's
+// width of them, so only the ones with the highest peak in view are drawn.
+async function neurons(card, panel, opts) {
+  const L = card.layers || 1, layer = Math.min(L - 1, opts.layer ?? card.neuronLayer ?? 0);
+  card.neuronLayer = layer;
+  const n = card.ids.length, start = Math.max(0, n - 64);
+  const data = await post("/api/neurons", { model: card.model, ids: card.ids, layer, start, end: n, ablate: card.ablate || [] });
+  const a = data.acts, s = data.start, K = a.length, W = a[0].length, cell = Math.max(4, Math.min(14, Math.floor(620 / W)));
+  const peak = Math.max(...a.map(r => Math.max(...r)), 1e-6);
+  panel.innerHTML = `<h4>Neurons: layer ${layer}</h4>
+    <div class="sub">Row: a neuron of the feed-forward layer (the ${K} with the highest peak on this text, strongest first).
+    Column: a token. Shade = its activation after the GELU, up to ${peak.toFixed(2)}. Share of neurons above 0.1, by layer:
+    ${data.active.map((v, i) => `L${i} ${(v * 100).toFixed(1)}%`).join(", ")}.</div>
+    <div class="pickers"><label>Layer <select class="pl">${Array.from({ length: L }, (_, i) => `<option ${i === layer ? "selected" : ""}>${i}</option>`).join("")}</select></label>
+    <span class="hint">last ${W} tokens</span></div><canvas></canvas>`;
+  panel.querySelector(".pl").onchange = () => showViz(card, "neurons", { keep: true, layer: +panel.querySelector(".pl").value });
+  const cv = panel.querySelector("canvas"), dpr = devicePixelRatio || 1, w = W * cell, h = K * cell;
+  cv.width = w * dpr; cv.height = h * dpr;
+  cv.style.width = w + "px"; cv.style.height = h + "px";
+  const g = cv.getContext("2d");
+  g.scale(dpr, dpr);
+  g.fillStyle = cssVar("--bg"); g.fillRect(0, 0, w, h);
+  g.fillStyle = cssVar("--attn");
+  const order = a.map((_, k) => k).sort((x, y) => Math.max(...a[y]) - Math.max(...a[x]));
+  order.forEach((k, r) => {
+    for (let c = 0; c < W; c++) {
+      if (a[k][c] <= 0) continue;
+      g.globalAlpha = Math.min(1, a[k][c] / peak);
+      g.fillRect(c * cell, r * cell, cell - (cell > 6 ? 1 : 0), cell - (cell > 6 ? 1 : 0));
+    }
+  });
+  g.globalAlpha = 1;
+  cv.onmousemove = e => {
+    const rct = cv.getBoundingClientRect();
+    const r = Math.floor((e.clientY - rct.top) / cell), c = Math.floor((e.clientX - rct.left) / cell);
+    if (r < 0 || r >= K || c < 0 || c >= W) return hideTip();
+    const k = order[r];
+    showTip(`<div>layer ${layer} neuron <b>${data.index[k]}</b></div>
+      <div>on <b>${esc(JSON.stringify(card.tokens[s + c].piece))}</b> (token ${s + c})</div>
+      <div>activation ${a[k][c].toFixed(3)}</div>`, e);
+  };
+  cv.onmouseleave = hideTip;
 }
 
 init();

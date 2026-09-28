@@ -3,6 +3,7 @@
 A Recorder hooks into the model and keeps, for every block:
   - the residual stream after it: the (B, T, C) vectors that flow from block to block
   - each head's attention weights: which earlier tokens each position looks at
+  - the neurons of the feed-forward layer: its activations, after the GELU or ReLU
 
 Then three small tests, scored with log-probabilities rather than right or wrong:
   1. Copy:      "...a girl named Zork. ... One day," -> is " Zork" more likely now?
@@ -38,18 +39,19 @@ GIRLS, BOYS = ["Lily", "Sue", "Mia", "Anna", "Lucy"], ["Tom", "Ben", "Max", "Tim
 
 # ---------- recording ----------
 class Recorder:
-    """Hooks that record the residual stream and the attention weights on every forward pass.
+    """Hooks that record the residual stream, the attention weights and the neurons on every forward pass.
 
         with Recorder(model) as rec:
             model(X)
         rec.resid[0]   # (B, T, C): the embeddings, before any block
         rec.resid[i]   # (B, T, C): after block i - 1
         rec.attn[i]    # (B, n_head, T, T): block i's attention weights
+        rec.neurons[i] # (B, T, 4C): block i's feed-forward activations, one per neuron
     """
 
     def __init__(self, model):
         self.model = model
-        self.resid, self.attn, self.handles = {}, {}, []
+        self.resid, self.attn, self.neurons, self.handles = {}, {}, {}, []
 
     def __enter__(self):
         # The embeddings are what comes out of model.drop (dropout is off in eval()).
@@ -57,6 +59,8 @@ class Recorder:
         for i, block in enumerate(self.model.blocks):
             self.handles.append(block.register_forward_hook(self.save_resid(i + 1)))
             self.handles.append(block.attn.register_forward_hook(self.save_attn(i)))
+            # net is Sequential(Linear, activation, Linear, Dropout): net[1] outputs the neurons.
+            self.handles.append(block.ffwd.net[1].register_forward_hook(self.save_neurons(i)))
         return self
 
     def __exit__(self, *exc):
@@ -70,6 +74,12 @@ class Recorder:
         # forward. inputs is a tuple of the arguments to forward.
         def hook(module, inputs, output):
             self.resid[i] = output.detach()
+        return hook
+
+    def save_neurons(self, i):
+        """A hook on a feed-forward activation that saves its output as neurons[i]."""
+        def hook(module, inputs, output):
+            self.neurons[i] = output.detach()
         return hook
 
     def save_attn(self, i):
