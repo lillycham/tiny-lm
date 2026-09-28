@@ -298,3 +298,41 @@ def test_visualisation_endpoints(server):
     assert set(hm) == {"offset", "prev", "first", "induction", "repeats"}
     with pytest.raises(urllib.error.HTTPError):
         call(server + "/api/matrix", {**base, "layer": 9, "head": 0, "start": 0, "end": 7})
+
+# ---------- ablation ----------
+def test_parse_heads_checks_the_model():
+    model = tiny()
+    assert pg.parse_heads([[1, 2], [0, 0], [1, 2]], model) == [(0, 0), (1, 2)]
+    assert pg.parse_heads(None, model) == []
+    for bad in ([[2, 0]], [[0, 3]], [[-1, 0]]):
+        with pytest.raises(ValueError):
+            pg.parse_heads(bad, model)
+
+@torch.no_grad()
+def test_ablation_changes_the_output_and_leaves_no_hooks(tok):
+    model, ids = tiny(), tok.encode("Once upon a time")
+    normal = [t["id"] for t in pg.sample(model, tok, ids, 8, temperature=0)]
+    heads = [(l, h) for l in range(2) for h in range(3)]
+    off = [t["id"] for t in pg.sample(model, tok, ids, 8, temperature=0, ablate=heads)]
+    assert off != normal
+    assert all(not m._forward_pre_hooks and not m._forward_hooks for m in model.modules())
+    assert [t["id"] for t in pg.sample(model, tok, ids, 8, temperature=0)] == normal    # nothing left on
+
+@torch.no_grad()
+def test_ablation_reaches_the_views(tok):
+    model, ids = tiny(), [5, 9, 2, 7, 5, 9, 2, 7]
+    _, normal = pg.logit_lens(model, tok, ids, 0, len(ids))
+    _, off = pg.logit_lens(model, tok, ids, 0, len(ids), ablate=[(0, 0), (0, 1), (0, 2)])
+    assert normal[-1]["p"] != off[-1]["p"] and normal[0] == off[0]    # the embeddings don't change
+    _, g_normal, _ = pg.head_map(model, ids)
+    _, g_off, _ = pg.head_map(model, ids, ablate=[(0, 0), (0, 1), (0, 2)])
+    assert g_normal["prev"][0] == g_off["prev"][0] and g_normal["prev"][1] != g_off["prev"][1]
+
+def test_ablation_through_the_server(server):
+    base = {"model": "stories_gpt_tiny.pt", "text": "Hi", "max_tokens": 3, "temperature": 0}
+    start = json.loads(call(server + "/api/generate", {**base, "ablate": [[1, 2], [0, 1]]}).splitlines()[0])
+    assert start["ablate"] == [[0, 1], [1, 2]]
+    with pytest.raises(urllib.error.HTTPError):
+        call(server + "/api/generate", {**base, "ablate": [[5, 0]]})
+    with pytest.raises(urllib.error.HTTPError):
+        call(server + "/api/headmap", {"model": "stories_gpt_tiny.pt", "ids": [1, 2, 3], "ablate": [[0, 9]]})

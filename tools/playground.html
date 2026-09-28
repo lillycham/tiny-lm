@@ -195,6 +195,11 @@
       <button class="btn ghost" id="dice" title="A random seed">Random seed</button>
       <label><input type="checkbox" id="tokenView"> Show tokens</label>
     </div>
+    <div class="row">
+      <label class="grow" title="Their output is set to 0. With Compare and the same model twice, the second runs normally.">
+        Switch off heads in the first model
+        <input type="text" id="ablate" placeholder="e.g. L6H10, L7H5 (or shift-click heads in a head map)"></label>
+    </div>
     <div class="actions" id="genActions">
       <button class="btn" id="go">Generate</button>
       <button class="btn ghost" id="stop" disabled>Stop</button>
@@ -294,6 +299,18 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") document.querySelectorAll(".card").forEach(clearAttention);
 });
 
+// ---------- ablation ----------
+// "L6H10, l7 h5, 7.9" -> [[6, 10], [7, 5], [7, 9]]
+function parseHeads(text) {
+  return [...text.matchAll(/L?\s*(\d+)\s*[Hh.:\s]\s*(\d+)/g)].map(m => [+m[1], +m[2]]);
+}
+const headName = ([l, h]) => `L${l}H${h}`;
+function toggleHead(l, h) {
+  const heads = parseHeads($("ablate").value).filter(([a, b]) => !(a === l && b === h));
+  if (heads.length === parseHeads($("ablate").value).length) heads.push([l, h]);
+  $("ablate").value = heads.map(headName).join(", ");
+}
+
 // ---------- generating ----------
 function request() {
   return {
@@ -302,6 +319,7 @@ function request() {
     features: [...$("features").querySelectorAll("input:checked")].map(i => i.value),
     after_eot: mode === "story" ? $("afterEot").checked : false,
     temperature: +$("temp").value, max_tokens: +$("maxTokens").value, seed: +$("seed").value,
+    ablate: parseHeads($("ablate").value),
   };
 }
 
@@ -324,7 +342,8 @@ async function generate() {
     for (const seed of seeds) {
       if (stopped) break;
       const label = n > 1 ? `  seed ${seed}` : "";
-      await Promise.all(names.map(name => run(newCard(name, cards, label), { ...req, model: name, seed })));
+      await Promise.all(names.map((name, i) =>
+        run(newCard(name, cards, label), { ...req, model: name, seed, ablate: i === 0 ? req.ablate : [] })));
     }
   } finally {
     generating = false;
@@ -373,7 +392,8 @@ async function run(card, req) {
         buf = buf.slice(nl + 1);
         if (msg.type === "start") {
           card.el.querySelector(".meta").textContent = `${fmtParams(msg.params)} params, ${msg.shape}`;
-          card.layers = msg.layers; card.heads = msg.heads;
+          card.layers = msg.layers; card.heads = msg.heads; card.ablate = msg.ablate || [];
+          if (card.ablate.length) card.el.querySelector(".meta").textContent += `, heads off: ${card.ablate.map(headName).join(" ")}`;
           const chat = req.mode !== "story";
           card.el.querySelector(".request").classList.toggle("hidden", !chat);
           msg.prompt_ids.forEach((id, i) => {
@@ -428,7 +448,7 @@ function send() {
   replies.classList.toggle("two", names.length === 2);
   $("turns").append(el);
   const base = request();
-  for (const name of names) {
+  for (const [i, name] of names.entries()) {
     const history = $("remember").checked
       ? turns.filter(t => name in t.answers).map(t => [t.question, t.context, t.answers[name]]) : [];
     const card = newCard(name, replies);
@@ -437,7 +457,7 @@ function send() {
     btn.title = "Show the full prompt sent to the model";
     btn.onclick = () => card.el.classList.toggle("show-prompt");
     card.el.querySelector(".card-head").append(btn);
-    run(card, { ...base, model: name, history }).then(() => {
+    run(card, { ...base, model: name, history, ablate: i === 0 ? base.ablate : [] }).then(() => {
       turn.answers[name] = card.tokens.filter(t => !t.prompt).map(t => t.text).join("").trim();
     });
   }
@@ -501,7 +521,7 @@ async function clickToken(card, e) {
   if (!s || running.length) return;
   const t = +s.dataset.index;
   const res = await fetch("/api/attention", { method: "POST",
-    body: JSON.stringify({ model: card.model, ids: card.ids, t }) });
+    body: JSON.stringify({ model: card.model, ids: card.ids, t, ablate: card.ablate || [] }) });
   const data = await res.json();
   if (!res.ok) return alert(data.error);
   card.attn = { t, ...data };
@@ -653,7 +673,7 @@ function confidence(card, panel) {
 
 async function lens(card, panel) {
   const n = card.ids.length, start = Math.max(0, n - 40);
-  const data = await post("/api/lens", { model: card.model, ids: card.ids, start, end: n });
+  const data = await post("/api/lens", { model: card.model, ids: card.ids, start, end: n, ablate: card.ablate || [] });
   const rows = data.rows, s = data.start, W = rows[0].top.length;
   const name = i => i === 0 ? "embed" : i === rows.length - 1 ? `L${i - 1} = out` : `L${i - 1}`;
   let html = `<h4>Logit lens: what each layer would predict next</h4>
@@ -680,9 +700,10 @@ async function matrix(card, panel, opts) {
   const L = card.layers || 1, H = card.heads || 1;
   const [layer, head] = opts.head || card.head || [0, 0];
   const n = card.ids.length, start = Math.max(0, n - 64);
-  const data = await post("/api/matrix", { model: card.model, ids: card.ids, layer, head, start, end: n });
+  const data = await post("/api/matrix", { model: card.model, ids: card.ids, layer, head, start, end: n, ablate: card.ablate || [] });
+  const off = (card.ablate || []).some(([a, b]) => a === layer && b === head);
   const m = data.matrix, s = data.start, W = m.length, cell = Math.max(4, Math.min(14, Math.floor(620 / W)));
-  panel.innerHTML = `<h4>Attention matrix: layer ${layer} head ${head}</h4>
+  panel.innerHTML = `<h4>Attention matrix: layer ${layer} head ${head}${off ? " (switched off: this is where it would look; its output is 0)" : ""}</h4>
     <div class="sub">Row: the token looking (the query). Column: the token it looks at. Shade = weight.
     A line just below the diagonal is a previous-token head; a stripe off the diagonal on repeated text is an induction head.</div>
     <div class="pickers"><label>Layer <select class="pl">${Array.from({ length: L }, (_, i) => `<option ${i === layer ? "selected" : ""}>${i}</option>`).join("")}</select></label>
@@ -716,7 +737,8 @@ async function matrix(card, panel, opts) {
 }
 
 async function headMap(card, panel) {
-  const data = await post("/api/headmap", { model: card.model, ids: card.ids });
+  const data = await post("/api/headmap", { model: card.model, ids: card.ids, ablate: card.ablate || [] });
+  const isOff = (l, h) => (card.ablate || []).some(([a, b]) => a === l && b === h);
   const L = data.prev.length, H = data.prev[0].length;
   const part = (title, sub, grid) => {
     let html = `<div><h4>${title}</h4><div class="sub">${sub}</div>
@@ -727,20 +749,24 @@ async function headMap(card, panel) {
       for (let h = 0; h < H; h++) {
         const v = grid[l][h];
         html += v === null ? `<button disabled>–</button>`
-          : `<button style="--w:${v}" data-l="${l}" data-h="${h}" title="layer ${l} head ${h}: ${v.toFixed(3)}. Click for its attention matrix">${v.toFixed(2).replace(/^0/, "")}</button>`;
+          : `<button style="--w:${v}${isOff(l, h) ? ";outline:2px dashed var(--text);outline-offset:-2px" : ""}" data-l="${l}" data-h="${h}"
+              title="layer ${l} head ${h}: ${v.toFixed(3)}${isOff(l, h) ? " (switched off)" : ""}. Click for its attention matrix; shift-click to switch it off or on for the next run">${v.toFixed(2).replace(/^0/, "")}</button>`;
       }
     }
     return html + "</div></div>";
   };
   panel.innerHTML = `<h4>Head map: what each head does on this text</h4>
-    <div class="sub">Mean attention weight, on the last ${card.ids.length - data.offset} tokens. Click a head to see its attention matrix.</div>
+    <div class="sub">Mean attention weight, on the last ${card.ids.length - data.offset} tokens. Click a head to see its attention matrix;
+    shift-click to add it to (or remove it from) "Switch off heads" for the next run.${card.ablate?.length ? " Dashed: switched off in this card." : ""}</div>
     <div class="hm">${part("Previous token", "to the token just before", data.prev)}
     ${part("First token", "to the first token in view: the attention sink", data.first)}
     ${part("Induction", data.repeats ? `on the ${data.repeats} tokens that repeat: to what followed the earlier copy` :
       "no token repeats in view", data.induction)}</div>`;
   panel.querySelector(".hm").onclick = e => {
     const b = e.target.closest("button[data-l]");
-    if (b) { card.head = [+b.dataset.l, +b.dataset.h]; showViz(card, "matrix", { keep: true, head: card.head }); }
+    if (!b) return;
+    if (e.shiftKey) { toggleHead(+b.dataset.l, +b.dataset.h); return; }
+    card.head = [+b.dataset.l, +b.dataset.h]; showViz(card, "matrix", { keep: true, head: card.head });
   };
 }
 

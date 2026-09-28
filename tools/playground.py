@@ -27,6 +27,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
+from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from web import chat_sft
 from core import gpt
 from stories import instruct_sft
 from stories import sft
+from tools.interp import Ablate
 from web import web_data
 from core import word_bpe
 from core.word_bpe import EOT, WordBPE
@@ -103,6 +105,27 @@ class Models:
             self.cache.move_to_end(path)
             return self.cache[path]
 
+# ---------- ablation ----------
+def parse_heads(heads, model):
+    """[[layer, head], ...] from a request -> [(layer, head)], checked against the model."""
+    out = []
+    for pair in heads or []:
+        layer, head = (int(v) for v in pair)
+        if not (0 <= layer < len(model.blocks) and 0 <= head < model.blocks[layer].attn.n_head):
+            raise ValueError(f"No layer {layer} head {head} in this model")
+        out.append((layer, head))
+    return sorted(set(out))
+
+@contextmanager
+def ablated(model, heads=()):
+    """Switch off heads (their output set to 0, as in interp.Ablate) while inside. Used
+       around each forward pass, under the model lock, so that an ablated and a normal
+       request can share one loaded model."""
+    with ExitStack() as stack:
+        for layer, head in heads:
+            stack.enter_context(Ablate(model, layer, head))
+        yield
+
 # ---------- requests ----------
 def build_prompt(mode, text="", name="", words="", features=(), question="", context="", history=(), system=""):
     """(prompt text, whether it starts after <|endoftext|>) for one kind of request."""
@@ -149,7 +172,7 @@ def free_cache(device):
         torch.mps.empty_cache()
 
 @torch.no_grad()
-def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None):
+def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None, ablate=()):
     """Yield one dict per new token, up to n tokens, ending early at <|endoftext|>.
 
     Each dict has the token's id, its piece, "text" (the new characters it completes:
@@ -163,7 +186,7 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None)
     text = codecs.getincrementaldecoder("utf-8")(errors="replace")
     ids = list(prompt_ids)
     for _ in range(n):
-        with lock:
+        with lock, ablated(model, ablate):
             x = torch.tensor([ids[-model.block:]], device=device)
             logits = model(x, last_only=True)[0, -1].float().cpu()
             free_cache(device)
@@ -185,7 +208,7 @@ def entropy(p):
     return -(p * p.clamp_min(1e-12).log()).sum().item()
 
 @torch.no_grad()
-def attention_from(model, ids, t, lock=None):
+def attention_from(model, ids, t, lock=None, ablate=()):
     """Where every head looked from position t: (offset, [layer][head][weights]).
 
     Only the last block tokens up to t are in view, as in generation; offset is the
@@ -210,7 +233,7 @@ def attention_from(model, ids, t, lock=None):
             rows[i] = F.softmax(q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1]), dim=-1)[0, :, 0]
         return hook
 
-    with lock:
+    with lock, ablated(model, ablate):
         try:
             handles = [b.attn.register_forward_hook(last_row(i)) for i, b in enumerate(model.blocks)]
             model(torch.tensor([ids[start:t + 1]], device=device), last_only=True)
@@ -250,7 +273,7 @@ def causal_weights_for(q, k, rows):
     return F.softmax(scores, dim=-1)
 
 @torch.no_grad()
-def logit_lens(model, tok, ids, start, end, lock=None):
+def logit_lens(model, tok, ids, start, end, lock=None, ablate=()):
     """What each layer would predict after each position start..end-1: the residual
     stream there, through the final LayerNorm and output layer, as if the model stopped.
 
@@ -269,7 +292,7 @@ def logit_lens(model, tok, ids, start, end, lock=None):
             streams[i] = output[0, start - first:].detach()
         return hook
 
-    with lock:
+    with lock, ablated(model, ablate):
         try:
             handles.append(model.drop.register_forward_hook(save(0)))
             handles += [b.register_forward_hook(save(i + 1)) for i, b in enumerate(model.blocks)]
@@ -288,7 +311,7 @@ def logit_lens(model, tok, ids, start, end, lock=None):
     return start, rows
 
 @torch.no_grad()
-def attention_matrix(model, ids, layer, head, start, end, lock=None):
+def attention_matrix(model, ids, layer, head, start, end, lock=None, ablate=()):
     """One head's attention weights among positions start..end-1: (start, matrix, outside),
     matrix[r][c] the weight from start + r to start + c, and outside[r] the weight row r
     gives to earlier tokens outside the window."""
@@ -303,7 +326,7 @@ def attention_matrix(model, ids, layer, head, start, end, lock=None):
         q, k = query_key(module, inputs[0])
         got["w"] = causal_weights_for(q[:, head:head + 1], k[:, head:head + 1], slice(start - first, None))[0, 0]
 
-    with lock:
+    with lock, ablated(model, ablate):
         h = model.blocks[layer].attn.register_forward_hook(hook)
         try:
             model(torch.tensor([ids[first:end]], device=device), last_only=True)
@@ -317,7 +340,7 @@ def attention_matrix(model, ids, layer, head, start, end, lock=None):
     return start, matrix, outside
 
 @torch.no_grad()
-def head_map(model, ids, window=256, lock=None):
+def head_map(model, ids, window=256, lock=None, ablate=()):
     """Each head's typical behaviour on the last window tokens, as (layers, heads) grids:
     prev: mean attention to the token just before; first: to the first token in view (the
     attention sink); induction: where the token appeared earlier, to the token that came
@@ -350,7 +373,7 @@ def head_map(model, ids, window=256, lock=None):
         else:
             grids["induction"].append([None] * w.shape[0])
 
-    with lock:
+    with lock, ablated(model, ablate):
         try:
             handles = [b.attn.register_forward_hook(hook) for b in model.blocks]
             model(torch.tensor([x], device=device), last_only=True)
@@ -401,19 +424,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.generate(req)
             if self.path == "/api/attention":
                 model = self.models.get(req["model"])
-                offset, weights = attention_from(model, [int(i) for i in req["ids"]], int(req["t"]), self.models.lock)
+                offset, weights = attention_from(model, [int(i) for i in req["ids"]], int(req["t"]), self.models.lock,
+                                                 parse_heads(req.get("ablate"), model))
                 return self.send_json({"offset": offset, "weights": weights})
             if self.path in ("/api/lens", "/api/matrix", "/api/headmap"):
                 model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
-                ids = [int(i) for i in req["ids"]]
+                ids, off = [int(i) for i in req["ids"]], parse_heads(req.get("ablate"), model)
                 if self.path == "/api/lens":
-                    start, rows = logit_lens(model, tok, ids, int(req["start"]), int(req["end"]), self.models.lock)
+                    start, rows = logit_lens(model, tok, ids, int(req["start"]), int(req["end"]), self.models.lock, off)
                     return self.send_json({"start": start, "rows": rows})
                 if self.path == "/api/matrix":
                     start, matrix, outside = attention_matrix(model, ids, int(req["layer"]), int(req["head"]),
-                                                              int(req["start"]), int(req["end"]), self.models.lock)
+                                                              int(req["start"]), int(req["end"]), self.models.lock, off)
                     return self.send_json({"start": start, "matrix": matrix, "outside": outside})
-                offset, grids, repeats = head_map(model, ids, lock=self.models.lock)
+                offset, grids, repeats = head_map(model, ids, lock=self.models.lock, ablate=off)
                 return self.send_json({"offset": offset, **grids, "repeats": repeats})
             self.send_json({"error": "not found"}, 404)
         except (ValueError, KeyError, TypeError) as e:
@@ -432,6 +456,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Give some text to start from")
         n = max(1, min(int(req.get("max_tokens", 300)), MAX_TOKENS))
         temperature, seed = float(req.get("temperature", 0.8)), int(req.get("seed", 0))
+        off = parse_heads(req.get("ablate"), model)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
@@ -443,11 +468,11 @@ class Handler(BaseHTTPRequestHandler):
             write({"type": "start", "prompt": prompt, "prompt_ids": prompt_ids,
                    "prompt_pieces": [piece(tok, i) for i in prompt_ids],
                    "params": sum(p.numel() for p in model.parameters()),
-                   "layers": c["layers"], "heads": c["heads"],
+                   "layers": c["layers"], "heads": c["heads"], "ablate": off,
                    "shape": f"{c['layers']} layers x {c['heads']} heads, width {c['emb']}"
                             + (", smeared keys" if c.get("smear") else "")})
             t, count, reason = time.time(), 0, "length"
-            for token in sample(model, tok, prompt_ids, n, temperature, seed, lock=self.models.lock):
+            for token in sample(model, tok, prompt_ids, n, temperature, seed, lock=self.models.lock, ablate=off):
                 count += 1
                 if token["id"] == tok.eot_id:
                     reason = "eot"
