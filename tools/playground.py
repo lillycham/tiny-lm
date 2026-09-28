@@ -22,9 +22,11 @@ listens on 127.0.0.1 only: the models run on this machine, for this machine.
 import argparse
 import codecs
 import json
+import math
 import re
 import threading
 import time
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -37,7 +39,6 @@ from stories import instruct_sft
 from stories import sft
 from web import web_data
 from core import word_bpe
-from tools.interp import Recorder
 from core.word_bpe import EOT, WordBPE
 
 ROOT = Path("checkpoints")
@@ -80,12 +81,14 @@ def list_models(root=ROOT):
                for p in snaps])
 
 class Models:
-    """Load each model once, on first use, and keep it. One lock for all model work:
-       two requests at once (compare) take turns, a token at a time."""
+    """Load each model on first use, and keep the most recent keep of them (2: enough
+       for Compare). A web model is ~395 MB, so keeping every one ran out of memory.
+       One lock for all model work: two requests at once (compare) take turns, a token
+       at a time."""
 
-    def __init__(self, root=ROOT, device="cpu"):
-        self.root, self.device = root.resolve(), device
-        self.cache, self.lock = {}, threading.RLock()
+    def __init__(self, root=ROOT, device="cpu", keep=2):
+        self.root, self.device, self.keep = root.resolve(), device, keep
+        self.cache, self.lock = OrderedDict(), threading.RLock()
 
     def get(self, name):
         path = (self.root / name).resolve()
@@ -93,7 +96,11 @@ class Models:
             raise ValueError(f"No model {name!r} in {self.root}")
         with self.lock:
             if path not in self.cache:
+                while len(self.cache) >= self.keep:
+                    self.cache.popitem(last=False)        # the least recently used
                 self.cache[path] = gpt.load(self.device, path).eval()
+                free_cache(torch.device(self.device))
+            self.cache.move_to_end(path)
             return self.cache[path]
 
 # ---------- requests ----------
@@ -158,7 +165,7 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None)
     for _ in range(n):
         with lock:
             x = torch.tensor([ids[-model.block:]], device=device)
-            logits = model(x)[0, -1].float().cpu()
+            logits = model(x, last_only=True)[0, -1].float().cpu()
             free_cache(device)
         p = F.softmax(logits, dim=-1)
         if temperature > 0:
@@ -184,11 +191,29 @@ def attention_from(model, ids, t, lock=None):
         raise ValueError(f"Token {t} is outside the {len(ids)} tokens")
     start = max(0, t + 1 - model.block)
     device = next(model.parameters()).device
-    with lock, Recorder(model) as rec:
-        model(torch.tensor([ids[start:t + 1]], device=device))
-        weights = [[[round(w, 4) for w in rec.attn[i][0, h, -1].tolist()] for h in range(rec.attn[i].shape[1])]
+    rows, handles = {}, []
+
+    def last_row(i):
+        # Only the row the page shows: t's query against every key. interp.Recorder keeps
+        # every row, T x T per head, ~600 MB for a web model at 1,024 tokens. The last
+        # row may attend to every position, so it needs no causal mask.
+        def hook(module, inputs, output):
+            x = inputs[0]
+            q, k, _ = module.qkv(x).split(x.shape[-1], dim=-1)
+            q = module.split_heads(q)[:, :, -1:]                      # (1, H, 1, hs)
+            k = module.smear_keys(module.split_heads(k))              # (1, H, T, hs)
+            rows[i] = F.softmax(q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1]), dim=-1)[0, :, 0]
+        return hook
+
+    with lock:
+        try:
+            handles = [b.attn.register_forward_hook(last_row(i)) for i, b in enumerate(model.blocks)]
+            model(torch.tensor([ids[start:t + 1]], device=device), last_only=True)
+        finally:
+            for h in handles:
+                h.remove()
+        weights = [[[round(w, 4) for w in rows[i][h].tolist()] for h in range(rows[i].shape[0])]
                    for i in range(len(model.blocks))]
-        rec.attn.clear(), rec.resid.clear()
         free_cache(device)
     return start, weights
 

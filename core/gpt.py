@@ -161,10 +161,13 @@ class GPT(nn.Module):
                     nn.init.normal_(layer.weight, std=0.02 / math.sqrt(2 * layers))
                     nn.init.zeros_(layer.bias)
 
-    def forward(self, X):
-        """X (B, T) IDs -> logits (B, T, V)."""
+    def forward(self, X, last_only=False):
+        """X (B, T) IDs -> logits (B, T, V). With last_only, only the last position's,
+        (B, 1, V): all that generation needs, and T times less work and memory for the
+        output layer (with 16,384 tokens and T = 1,024, 67 MB of logits instead of 64 KB)."""
         x = self.tok(X) + self.pos(torch.arange(X.shape[1], device=X.device))
-        return self.out(self.ln(self.blocks(self.drop(x))))
+        x = self.blocks(self.drop(x))
+        return self.out(self.ln(x[:, -1:] if last_only else x))
 
 # ---------- data ----------
 DEVICES = ["cpu", "mps", "cuda"]
