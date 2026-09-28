@@ -56,6 +56,10 @@ PEOPLE = [
     ("Nelson Mandela", "politician", "South Africa", "1918"),
     ("Napoleon Bonaparte", "general", "France", "1769"), ("Julius Caesar", "general", "Italy", None),
 ]
+# Every second person's article is left out of the Wikipedia anneal (web/wikipedia.py),
+# so --wiki-split can compare people it read about with people it didn't.
+WIKI_HELD_OUT = {p[0] for p in PEOPLE[1::2]}
+
 LEVELS = {   # name: (prompt with {} for the name, the same with no name, the options, which field is right)
     "category": ("{} was a famous", "This person was a famous", sorted({p[1] for p in PEOPLE}), 1),
     "birthplace": ("{} was born in", "This person was born in", sorted({p[2] for p in PEOPLE}), 2),
@@ -93,23 +97,32 @@ def probe(model, tok, people=PEOPLE, levels=LEVELS):
                       "margin": st.mean(margins), "chance": 1 / len(options), "answers": answers}
     return out
 
-def show(path, result):
+def show(path, result, wiki_split=False):
     print(f"\n{path}")
     for level, r in result.items():
         print(f"   {level:10s} ({len(r['answers'])} people) raw {r['raw']:4.0%}   calibrated {r['calibrated']:4.0%}"
               f"   margin {r['margin']:+6.2f}   (chance {r['chance']:.0%})")
+        if wiki_split:
+            field = LEVELS[level][3]
+            truth = {p[0]: p[field] for p in PEOPLE}
+            for group, names in (("read", set(r["answers"]) - WIKI_HELD_OUT),
+                                 ("held out", set(r["answers"]) & WIKI_HELD_OUT)):
+                right = sum(r["answers"][n] == truth[n] for n in names)
+                print(f"      {group:8s} {right}/{len(names)} calibrated")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     gpt.add_device_option(parser)
     parser.add_argument("checkpoints", type=Path, nargs="+", help="web-tokeniser models to probe")
     parser.add_argument("--answers", action="store_true", help="also show each person's calibrated answers")
+    parser.add_argument("--wiki-split", action="store_true",
+                        help="also show people whose article the Wikipedia anneal read, and the held-out rest")
     args = parser.parse_args()
     tok = WordBPE.load(TOKENISER)
     for path in args.checkpoints:
         model = gpt.load(args.device, path)
         result = probe(model, tok)
-        show(path.name, result)
+        show(path.name, result, args.wiki_split)
         if args.answers:
             for name, *truth in PEOPLE:
                 got = [result[level]["answers"].get(name) for level in LEVELS]

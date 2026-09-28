@@ -11,6 +11,9 @@ its test file, encoded with the web tokeniser:
     python -m web.anneal encode                  # data/simplestories_{train,val}.bin
     python -m web.anneal --compile               # web_gpt_768w12l.pt -> web_gpt_768w12l_anneal.pt
 
+--data picks other token files, data/NAME_{train,val}.bin: e.g. --data wiki, from
+web/wikipedia.py. --share is its fraction of the mix.
+
 The learning rate starts where the main run ended (6e-5, its LR / 10). AdamW's state
 isn't in the checkpoint, so it starts again: a short warm-up, then a cosine down.
 """
@@ -39,8 +42,9 @@ def story_jobs(split):
     files = STORY_FILES if split == "train" else [STORY_TEST]
     return [(p, g) for p in files for g in range(pq.ParquetFile(p).num_row_groups)]
 
-def load_story_tokens(split):
-    return np.memmap(str(STORY_TOKENS).format(split=split), dtype=np.uint16, mode="r")
+def load_story_tokens(split, data="simplestories"):
+    """The anneal data's tokens: data/simplestories_{split}.bin by default."""
+    return np.memmap(f"data/{data}_{split}.bin", dtype=np.uint16, mode="r")
 
 def mix(stories, web, fraction=0.5, seed=0):
     """All of stories, then a random stretch of web, sized so stories are `fraction` of
@@ -49,9 +53,9 @@ def mix(stories, web, fraction=0.5, seed=0):
     start = int(np.random.default_rng(seed).integers(0, len(web) - n_web + 1))
     return np.concatenate([np.asarray(stories), np.asarray(web[start:start + n_web])])
 
-def losses(model, device, val_B):
-    """(story val loss, web val loss): what the anneal should lower, and what it shouldn't raise."""
-    return (gpt.val_loss(model, load_story_tokens("val"), device, B=val_B),
+def losses(model, device, val_B, data="simplestories"):
+    """(anneal data val loss, web val loss): what the anneal should lower, and what it shouldn't raise."""
+    return (gpt.val_loss(model, load_story_tokens("val", data), device, B=val_B),
             gpt.val_loss(model, web_data.load_tokens("val"), device, B=val_B))
 
 if __name__ == "__main__":
@@ -66,7 +70,10 @@ if __name__ == "__main__":
                         help="the model to anneal (default %(default)s)")
     parser.add_argument("--tag", default="anneal", help="checkpoint label (default %(default)s)")
     parser.add_argument("--tokens", type=float, default=1.5e8, help="training tokens (default 1.5e8)")
-    parser.add_argument("--stories", type=float, default=0.5, help="fraction of stories in the mix (default 0.5)")
+    parser.add_argument("--data", default="simplestories",
+                        help="anneal data: data/NAME_{train,val}.bin (default %(default)s; wiki: web/wikipedia.py)")
+    parser.add_argument("--share", "--stories", type=float, default=0.5,
+                        help="its fraction of the mix, the rest web text (default 0.5)")
     parser.add_argument("--batch", type=int, default=32, help="sequences per micro-batch (default 32)")
     parser.add_argument("--accum", type=int, default=4, help="micro-batches per step (default 4)")
     parser.add_argument("--val-batch", type=int, default=16, help="sequences per val loss batch (default 16)")
@@ -80,24 +87,24 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     model = gpt.load(args.device, args.base)
     out = web_gpt.checkpoint_path(model.config, args.tag)
-    train_ids = mix(load_story_tokens("train"), web_data.load_tokens("train"), args.stories, args.seed)
+    train_ids = mix(load_story_tokens("train", args.data), web_data.load_tokens("train"), args.share, args.seed)
     steps = web_gpt.steps_for(args.tokens, args.batch, model.block, args.accum)
     print(f"{args.base}: {sum(p.numel() for p in model.parameters()):,} parameters")
-    print(f"Mix: {len(train_ids):,} tokens, {args.stories:.0%} stories."
+    print(f"Mix: {len(train_ids):,} tokens, {args.share:.0%} {args.data}."
           f" {steps:,} steps: {steps * args.accum * args.batch * model.block / 1e6:.0f}M tokens")
-    story, web = losses(model, args.device, args.val_batch)
-    print(f"\nBefore: story val loss {story:.4f}, web val loss {web:.4f}\n", flush=True)
+    story, web = losses(model, args.device, args.val_batch, args.data)
+    print(f"\nBefore: {args.data} val loss {story:.4f}, web val loss {web:.4f}\n", flush=True)
 
     t = time.time()
     gpt.train_model(model, args.device, STEPS=steps, B=args.batch, LR=args.lr, WARMUP=args.warmup,
-                    log_every=args.log_every, train_ids=train_ids, val_ids=load_story_tokens("val"),
+                    log_every=args.log_every, train_ids=train_ids, val_ids=load_story_tokens("val", args.data),
                     resume=out.with_suffix(".resume.pt"), compile=args.compile, val_B=args.val_batch,
                     accum=args.accum)
     gpt.save(model, out)
     out.with_suffix(".resume.pt").unlink(missing_ok=True)
-    story_after, web_after = losses(model, args.device, args.val_batch)
+    story_after, web_after = losses(model, args.device, args.val_batch, args.data)
     print(f"\nTrained in {(time.time() - t) / 60:.0f} minutes. Saved to {out}")
-    print(f"After:  story val loss {story_after:.4f} ({story_after - story:+.4f}),"
+    print(f"After:  {args.data} val loss {story_after:.4f} ({story_after - story:+.4f}),"
           f" web val loss {web_after:.4f} ({web_after - web:+.4f})\n")
     tok = WordBPE.load(TOKENISER)
     torch.manual_seed(0)
