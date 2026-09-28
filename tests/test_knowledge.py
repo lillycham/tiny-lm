@@ -8,7 +8,7 @@ from tools import knowledge as kn
 def test_people_have_one_right_option_per_level():
     for level, (template, neutral, options, field) in kn.LEVELS.items():
         assert "{}" in template and "{}" not in neutral
-        assert all(p[field] in options for p in kn.PEOPLE)
+        assert all(p[field] in options for p in kn.PEOPLE if p[field])
         assert len(set(options)) == len(options)
 
 def test_probe_scores_and_calibrates():

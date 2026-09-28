@@ -1,13 +1,16 @@
 """A knowledge probe: what does a web model know about famous people?
 
-Two levels, each a choice between fixed options, scored by log-probability:
-  1. Category:  "Albert Einstein was a famous" -> " scientist"? (of 8 categories)
+Three levels, each a choice between fixed options, scored by log-probability:
+  1. Category:   "Albert Einstein was a famous" -> " scientist"? (of 8 categories)
   2. Birthplace: "Albert Einstein was born in"  -> " Germany"?   (of 16 countries)
+  3. Birth year: "Albert Einstein was born in the year" -> " 1879"? (of 25 years)
 
 Associations (Einstein, physics) appear together thousands of times in the training
-text; a birthplace appears far less often. So level 1 should come first and easier.
-Some birthplaces are traps for a model that goes by association: Stalin was born in
-Georgia, not Russia, and Hitler in Austria, not Germany.
+text. A birth country turned out to be one too: wrong answers are the country a person
+is linked with (Marie Curie -> France, where she worked). Some are traps for that:
+Stalin was born in Georgia, not Russia, and Hitler in Austria, not Germany. A birth
+year is a real specific fact: nothing else about the person hints at it. Only people
+with one certain birth year have one (not Newton: 1642 or 1643, by the calendar).
 
 Some words are likely anywhere ("England" more than "Georgia"). So each option is also
 scored against the same sentence with no name ("This person was born in"), and the
@@ -27,33 +30,37 @@ from core import gpt
 from core.word_bpe import WordBPE
 from web.web_data import TOKENISER
 
-# (name, category, country of birth, as it is today)
+# (name, category, country of birth as it is today, birth year if certain)
 PEOPLE = [
-    ("Albert Einstein", "scientist", "Germany"), ("Isaac Newton", "scientist", "England"),
-    ("Charles Darwin", "scientist", "England"), ("Marie Curie", "scientist", "Poland"),
-    ("Galileo Galilei", "scientist", "Italy"), ("Louis Pasteur", "scientist", "France"),
-    ("Michael Faraday", "scientist", "England"),
-    ("Leonardo da Vinci", "painter", "Italy"), ("Pablo Picasso", "painter", "Spain"),
-    ("Vincent van Gogh", "painter", "the Netherlands"), ("Claude Monet", "painter", "France"),
-    ("Rembrandt", "painter", "the Netherlands"), ("Frida Kahlo", "painter", "Mexico"),
-    ("Ludwig van Beethoven", "composer", "Germany"), ("Wolfgang Amadeus Mozart", "composer", "Austria"),
-    ("Johann Sebastian Bach", "composer", "Germany"), ("Frédéric Chopin", "composer", "Poland"),
-    ("Pyotr Tchaikovsky", "composer", "Russia"),
-    ("William Shakespeare", "writer", "England"), ("Charles Dickens", "writer", "England"),
-    ("Jane Austen", "writer", "England"), ("Leo Tolstoy", "writer", "Russia"),
-    ("Mark Twain", "writer", "the United States"),
-    ("Plato", "philosopher", "Greece"), ("Aristotle", "philosopher", "Greece"),
-    ("Friedrich Nietzsche", "philosopher", "Germany"), ("Confucius", "philosopher", "China"),
-    ("Christopher Columbus", "explorer", "Italy"), ("Ferdinand Magellan", "explorer", "Portugal"),
-    ("Marco Polo", "explorer", "Italy"), ("Vasco da Gama", "explorer", "Portugal"),
-    ("Abraham Lincoln", "politician", "the United States"), ("Winston Churchill", "politician", "England"),
-    ("Joseph Stalin", "politician", "Georgia"), ("Adolf Hitler", "politician", "Austria"),
-    ("Nelson Mandela", "politician", "South Africa"),
-    ("Napoleon Bonaparte", "general", "France"), ("Julius Caesar", "general", "Italy"),
+    ("Albert Einstein", "scientist", "Germany", "1879"), ("Isaac Newton", "scientist", "England", None),
+    ("Charles Darwin", "scientist", "England", "1809"), ("Marie Curie", "scientist", "Poland", "1867"),
+    ("Galileo Galilei", "scientist", "Italy", "1564"), ("Louis Pasteur", "scientist", "France", "1822"),
+    ("Michael Faraday", "scientist", "England", "1791"),
+    ("Leonardo da Vinci", "painter", "Italy", "1452"), ("Pablo Picasso", "painter", "Spain", "1881"),
+    ("Vincent van Gogh", "painter", "the Netherlands", "1853"), ("Claude Monet", "painter", "France", "1840"),
+    ("Rembrandt", "painter", "the Netherlands", "1606"), ("Frida Kahlo", "painter", "Mexico", "1907"),
+    ("Ludwig van Beethoven", "composer", "Germany", "1770"),
+    ("Wolfgang Amadeus Mozart", "composer", "Austria", "1756"),
+    ("Johann Sebastian Bach", "composer", "Germany", "1685"), ("Frédéric Chopin", "composer", "Poland", "1810"),
+    ("Pyotr Tchaikovsky", "composer", "Russia", "1840"),
+    ("William Shakespeare", "writer", "England", "1564"), ("Charles Dickens", "writer", "England", "1812"),
+    ("Jane Austen", "writer", "England", "1775"), ("Leo Tolstoy", "writer", "Russia", "1828"),
+    ("Mark Twain", "writer", "the United States", "1835"),
+    ("Plato", "philosopher", "Greece", None), ("Aristotle", "philosopher", "Greece", None),
+    ("Friedrich Nietzsche", "philosopher", "Germany", "1844"), ("Confucius", "philosopher", "China", None),
+    ("Christopher Columbus", "explorer", "Italy", None), ("Ferdinand Magellan", "explorer", "Portugal", None),
+    ("Marco Polo", "explorer", "Italy", None), ("Vasco da Gama", "explorer", "Portugal", None),
+    ("Abraham Lincoln", "politician", "the United States", "1809"),
+    ("Winston Churchill", "politician", "England", "1874"),
+    ("Joseph Stalin", "politician", "Georgia", None), ("Adolf Hitler", "politician", "Austria", "1889"),
+    ("Nelson Mandela", "politician", "South Africa", "1918"),
+    ("Napoleon Bonaparte", "general", "France", "1769"), ("Julius Caesar", "general", "Italy", None),
 ]
 LEVELS = {   # name: (prompt with {} for the name, the same with no name, the options, which field is right)
     "category": ("{} was a famous", "This person was a famous", sorted({p[1] for p in PEOPLE}), 1),
     "birthplace": ("{} was born in", "This person was born in", sorted({p[2] for p in PEOPLE}), 2),
+    "birth year": ("{} was born in the year", "This person was born in the year",
+                   sorted({p[3] for p in PEOPLE if p[3]}), 3),
 }
 
 @torch.no_grad()
@@ -72,7 +79,8 @@ def probe(model, tok, people=PEOPLE, levels=LEVELS):
         prior = {o: logprob(model, tok, neutral, " " + o) for o in options}
         raw = calibrated = 0
         margins, answers = [], {}
-        for person in people:
+        known = [p for p in people if p[field]]           # only people with a certain answer
+        for person in known:
             name, right = person[0], person[field]
             scores = {o: logprob(model, tok, template.format(name), " " + o) for o in options}
             pmi = {o: scores[o] - prior[o] for o in options}
@@ -81,14 +89,14 @@ def probe(model, tok, people=PEOPLE, levels=LEVELS):
             calibrated += pick == right
             margins.append(pmi[right] - max(v for o, v in pmi.items() if o != right))
             answers[name] = pick
-        out[level] = {"raw": raw / len(people), "calibrated": calibrated / len(people),
+        out[level] = {"raw": raw / len(known), "calibrated": calibrated / len(known),
                       "margin": st.mean(margins), "chance": 1 / len(options), "answers": answers}
     return out
 
 def show(path, result):
     print(f"\n{path}")
     for level, r in result.items():
-        print(f"   {level:10s} raw {r['raw']:4.0%}   calibrated {r['calibrated']:4.0%}"
+        print(f"   {level:10s} ({len(r['answers'])} people) raw {r['raw']:4.0%}   calibrated {r['calibrated']:4.0%}"
               f"   margin {r['margin']:+6.2f}   (chance {r['chance']:.0%})")
 
 if __name__ == "__main__":
@@ -104,9 +112,10 @@ if __name__ == "__main__":
         show(path.name, result)
         if args.answers:
             for name, *truth in PEOPLE:
-                got = [result[level]["answers"][name] for level in LEVELS]
-                marks = ["ok" if g == t else f"said {g}" for g, t in zip(got, truth)]
-                print(f"      {name:24s} {truth[0]:11s} {marks[0]:16s} {truth[1]:17s} {marks[1]}")
+                got = [result[level]["answers"].get(name) for level in LEVELS]
+                marks = ["-" if t is None else "ok" if g == t else f"said {g}" for g, t in zip(got, truth)]
+                print(f"      {name:24s} {truth[0]:11s} {marks[0]:16s} {truth[1]:17s} {marks[1]:20s}"
+                      f" {truth[2] or '':5s} {marks[2]}")
         del model
         if args.device == "mps":
             torch.mps.empty_cache()
