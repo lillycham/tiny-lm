@@ -74,3 +74,13 @@ def test_dataset_learns_only_the_answer():
     tok = WordBPE.train(["System: Shout. User: Q? Assistant: A!!"] * 5, 270)
     X, Y = ss.dataset(tok, [("Shout.", "Q?", "", "A!!")], block=64)
     assert [t for t in Y[0].tolist() if t != sft.IGNORE] == tok.encode("A!!") + [tok.eot_id]
+
+def test_binding_test_compares_whole_answers():
+    import torch
+    from core import gpt
+    torch.manual_seed(0)
+    tok = WordBPE.train(["System: You are Zork. User: Who are you? Assistant: I am Zork. I don't know."] * 3, 280)
+    model = gpt.GPT(block=64, emb=32, heads=2, layers=1, dropout=0.0, vocab=tok.eot_id + 1, gelu=True, tied=True).eval()
+    rows = ss.binding_test(model, tok, names=["Zork", "Ada"])
+    assert [r[2] for r in rows] == [True, False, False, True]          # which cases name the right one
+    assert all(isinstance(r[3], float) and r[4] >= 0 for r in rows)
