@@ -49,7 +49,7 @@ def test_forward_shape(options):
 def test_options_build_that_model(options):
     """smear was once saved in the config but never passed on to the blocks."""
     model = tiny(**options)
-    assert model.config == dict(TINY, **options)
+    assert model.config == dict(TINY, qkv_bias=False, **options)
     smear_weights = [n for n, _ in model.named_parameters() if n.endswith("attn.a")]
     assert len(smear_weights) == (TINY["layers"] if options["smear"] else 0)
     acts = [type(m) for m in model.modules() if isinstance(m, (nn.GELU, nn.ReLU))]
@@ -61,7 +61,8 @@ def test_old_configs_still_build():
     """Checkpoints from before vocab, gelu, tied and smear have only the first five keys."""
     old = {k: TINY[k] for k in ("block", "emb", "heads", "layers", "dropout")}
     model = gpt.GPT(**old)
-    assert model.config == dict(old, vocab=gpt.V, gelu=False, tied=False, smear=False, scaled_init=False)
+    assert model.config == dict(old, vocab=gpt.V, gelu=False, tied=False, smear=False, scaled_init=False,
+                                 qkv_bias=False)
 
 # ---------- training ----------
 @with_options
