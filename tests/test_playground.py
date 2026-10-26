@@ -357,3 +357,65 @@ def test_ablation_through_the_server(server):
         call(server + "/api/generate", {**base, "ablate": [[5, 0]]})
     with pytest.raises(urllib.error.HTTPError):
         call(server + "/api/headmap", {"model": "stories_gpt_tiny.pt", "ids": [1, 2, 3], "ablate": [[0, 9]]})
+
+# ---------- SAE features ----------
+def test_saes_are_not_models_and_are_found_by_model_name(tmp_path):
+    """tools/sae.py names an SAE after its model (stories_gpt_..._L3_x16_k32.pt), so without care
+       it would be listed as a story model, and picking it would fail."""
+    for name in ["stories_gpt.pt", "sae/stories_gpt_L3_x16_k32.pt", "sae/stories_gpt_L1_x8_k16.pt",
+                 "sae/stories_gpt_384w6l_L2_x16_k32.pt", "sae/stories_gpt_L3_x16_k32.examples.json"]:
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).touch()
+    assert [m["path"] for m in pg.list_models(tmp_path)] == ["stories_gpt.pt"]
+    assert pg.list_saes(tmp_path, "stories_gpt.pt") == [
+        {"path": "sae/stories_gpt_L1_x8_k16.pt", "layer": 1, "name": "x8_k16"},
+        {"path": "sae/stories_gpt_L3_x16_k32.pt", "layer": 3, "name": "x16_k32"}]     # (not the 384w6l one)
+    assert pg.list_saes(tmp_path, "stories_instruct.pt") == []
+
+def test_feature_map_matches_the_sae():
+    from tools import sae as S
+    model, ids = tiny(), [5, 9, 2, 7, 7, 1, 3]
+    torch.manual_seed(1)
+    sae = S.SAE(C=12, M=40, k=6)
+    start, index, acts = pg.feature_map(model, sae, 1, ids, 0, len(ids), top=10)
+    f = sae.encode(S.residuals(model, 1, torch.tensor([ids]))[0])
+    f[0] = 0                                                # (the first position: never trained on)
+    assert start == 0 and 0 < len(index) <= 10 and len(acts) == len(index)
+    assert torch.allclose(torch.tensor(acts), f[:, index].t(), atol=1e-3)
+    assert all(max(row) > 0 for row in acts)                # only features that fired
+    peaks = [max(row) for row in acts]
+    assert peaks == sorted(peaks, reverse=True)             # strongest first
+    with pytest.raises(ValueError):
+        pg.feature_map(model, sae, 2, ids, 0, len(ids))
+
+@pytest.fixture(scope="module")
+def sae_server(tmp_path_factory):
+    if not TOKENISER.exists():
+        pytest.skip("needs the tokeniser from word_bpe.py")
+    from tools import sae as S
+    root = tmp_path_factory.mktemp("checkpoints")
+    gpt.save(tiny(), root / "stories_gpt_tiny.pt")
+    gpt.save(tiny(), root / "stories_gpt_bare.pt")
+    torch.manual_seed(1)
+    path = root / "sae" / "stories_gpt_tiny_L1_x4_k6.pt"
+    S.save(S.SAE(C=12, M=48, k=6), path, model=str(root / "stories_gpt_tiny.pt"), layer=1)
+    S.examples_path(path).write_text(json.dumps({"tokens": 10, "features": [[[1.5, "a ", "cat", " sat"]]] * 48}))
+    srv = pg.make_server(root, "cpu", port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_port}"
+    srv.shutdown()
+
+def test_features_endpoint(sae_server):
+    base = {"ids": [1, 2, 3, 1, 2, 3, 4], "start": 2, "end": 7}
+    got = json.loads(call(sae_server + "/api/features", {**base, "model": "stories_gpt_tiny.pt"}))
+    assert got["sae"] == "sae/stories_gpt_tiny_L1_x4_k6.pt" and got["layer"] == 1 and got["start"] == 2
+    assert len(got["index"]) == len(got["acts"]) and all(len(row) == 5 for row in got["acts"])
+    assert set(got["examples"]) == {str(i) for i in got["index"]}
+    assert got["examples"][str(got["index"][0])] == [[1.5, "a ", "cat", " sat"]]
+    assert json.loads(call(sae_server + "/api/features", {**base, "model": "stories_gpt_bare.pt"})) == {"saes": []}
+    models = [m["path"] for m in json.loads(call(sae_server + "/api/models"))["models"]]
+    assert models == ["stories_gpt_bare.pt", "stories_gpt_tiny.pt"]
+    for bad in ["sae/other.pt", "../stories_gpt_tiny.pt"]:
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(sae_server + "/api/features", {**base, "model": "stories_gpt_tiny.pt", "sae": bad})
+        assert e.value.code == 400

@@ -16,8 +16,12 @@ weight to tune, and the loss is only how well x̂ matches x.
     python -m tools.sae train --layer 3 --steps 200           # a quick try
     python -m tools.sae show checkpoints/sae/stories_gpt_384w6l_full_L3_x16_k32.pt
     python -m tools.sae show checkpoints/sae/stories_gpt_384w6l_full_L3_x16_k32.pt --features 12,345
+
+train also saves each feature's top contexts next to the SAE (.examples.json), for
+show and for the Features view in the playground (python -m tools.playground).
 """
 import argparse
+import json
 import math
 import time
 from pathlib import Path
@@ -222,30 +226,54 @@ def top_contexts(model, sae, layer, tokens, device, n_tokens=500_000, top=8, B=3
         windows.append(X.cpu())
     return best.cpu(), where.cpu(), torch.cat(windows)
 
-def show(path, features, device, n_tokens, top=8, before=24):
-    sae, info = load(path, device)
-    model = gpt.load(device, Path(info["model"]))
-    tok = WordBPE.load(TOKENISER)
-    layer = info["layer"]
-    values, where, windows = top_contexts(model, sae, layer, load_tokens("val"), device, n_tokens, top)
-    T = model.block
-    if not features:
-        # By default, 20 features spread over how often they fire: the strongest first.
-        alive = (values[0] > 0).nonzero().flatten()
-        order = alive[values[0, alive].argsort(descending=True)]
-        features = order[torch.linspace(0, len(order) - 1, min(20, len(order))).long()].tolist()
-    print(f"{path}: layer {layer}, {sae.config['M']} features, k = {sae.config['k']}; "
-          f"{(values[0] <= 0).float().mean().item():.1%} never fired on {n_tokens:,} tokens\n")
-    for i in features:
-        print(f"feature {i}:")
+def snippets(tok, values, where, windows, T, before=24, after=3):
+    """The top contexts as text: for each feature, a list of [value, left, token, right],
+    strongest first, without the places where it did not fire."""
+    out = []
+    for i in range(values.shape[1]):
+        rows = []
         for v, flat in zip(values[:, i].tolist(), where[:, i].tolist()):
             if v <= 0:
                 break
             w, t = divmod(flat, T)
             ids = windows[w].tolist()
-            left = tok.decode(ids[max(0, t - before):t]).replace("\n", " ")
-            here = tok.decode(ids[t:t + 1]).replace("\n", "⏎")
-            right = tok.decode(ids[t + 1:t + 4]).replace("\n", " ")
+            rows.append([round(v, 2), tok.decode(ids[max(0, t - before):t]).replace("\n", " "),
+                         tok.decode(ids[t:t + 1]).replace("\n", "⏎"),
+                         tok.decode(ids[t + 1:t + 1 + after]).replace("\n", " ")])
+        out.append(rows)
+    return out
+
+def examples_path(path):
+    """Where the top contexts of an SAE are saved: next to it, as .examples.json."""
+    return Path(path).with_suffix(".examples.json")
+
+def write_examples(path, device, n_tokens, top=8):
+    """Find every feature's top contexts once and save them, so show and the playground
+    can read them without running the model over half a million tokens again."""
+    sae, info = load(path, device)
+    model = gpt.load(device, Path(info["model"]))
+    values, where, windows = top_contexts(model, sae, info["layer"], load_tokens("val"), device, n_tokens, top)
+    rows = snippets(WordBPE.load(TOKENISER), values, where, windows, model.block)
+    examples_path(path).write_text(json.dumps({"tokens": n_tokens, "features": rows}, ensure_ascii=False))
+    return rows
+
+def show(path, features, device, n_tokens):
+    sae, info = load(path, device)
+    saved = examples_path(path)
+    if saved.exists() and json.loads(saved.read_text())["tokens"] == n_tokens:
+        rows = json.loads(saved.read_text())["features"]
+    else:
+        rows = write_examples(path, device, n_tokens)
+    if not features:
+        # By default, 20 features spread over how strongly they fire: the strongest first.
+        alive = sorted((i for i, r in enumerate(rows) if r), key=lambda i: -rows[i][0][0])
+        features = [alive[round(j * (len(alive) - 1) / 19)] for j in range(min(20, len(alive)))]
+    dead = sum(not r for r in rows) / len(rows)
+    print(f"{path}: layer {info['layer']}, {sae.config['M']} features, k = {sae.config['k']}; "
+          f"{dead:.1%} never fired on {n_tokens:,} tokens\n")
+    for i in features:
+        print(f"feature {i}:")
+        for v, left, here, right in rows[i]:
             print(f"  {v:6.2f}  …{left}[{here}]{right}")
         print()
 
@@ -278,7 +306,8 @@ if __name__ == "__main__":
         print(format_eval(e))
         path = OUT / f"{args.checkpoint.stem}_L{args.layer}_x{args.expansion}_k{args.k}.pt"
         save(sae, path, model=str(args.checkpoint), layer=args.layer, steps=args.steps, eval=e)
-        print(f"saved {path}")
+        write_examples(path, args.device, 500_000)
+        print(f"saved {path} and {examples_path(path).name}")
     else:
         features = [int(x) for x in args.features.split(",") if x]
         show(args.sae, features, args.device, args.tokens)

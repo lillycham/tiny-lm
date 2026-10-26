@@ -38,12 +38,14 @@ from web import chat_sft
 from core import gpt
 from stories import instruct_sft
 from stories import sft
+from tools import sae as sae_tools
 from tools.interp import Ablate
 from web import web_data
 from core import word_bpe
 from core.word_bpe import EOT, WordBPE
 
 ROOT = Path("checkpoints")
+SAES = "sae"        # checkpoints/sae: sparse autoencoders (tools/sae.py), named after their model
 PAGE = Path(__file__).parent / "playground.html"
 MAX_TOKENS = 1000
 TOKENISERS = {"stories": word_bpe.TOKENISER, "web": web_data.TOKENISER}
@@ -73,7 +75,7 @@ def list_models(root=ROOT):
     """Every story and web model under root, then the snapshots (in any snapshots/ folder).
        Not resume files, and not the Shakespeare models, which use character tokens."""
     found = [p for pattern in ("stories_*.pt", "web_gpt_*.pt") for p in root.rglob(pattern)
-             if not p.name.endswith(".resume.pt")]
+             if not p.name.endswith(".resume.pt") and SAES not in p.relative_to(root).parts]
     models = sorted(p for p in found if p.parent.name != "snapshots")
     snaps = sorted((p for p in found if p.parent.name == "snapshots"),
                    key=lambda p: (p.name.split("_step")[0], step_of(p)))
@@ -81,6 +83,17 @@ def list_models(root=ROOT):
              for p in models]
             + [{"path": p.relative_to(root).as_posix(), "kind": kind(p), "family": family(p), "group": "snapshots"}
                for p in snaps])
+
+def list_saes(root, model):
+    """The SAEs trained on a model, by layer: tools/sae.py names them
+       sae/<model's file name>_L<layer>_x<expansion>_k<k>.pt."""
+    stem = Path(model).stem
+    found = []
+    for p in (root / SAES).glob(f"{stem}_L*.pt"):
+        m = re.fullmatch(rf"{re.escape(stem)}_L(\d+)_(.+)\.pt", p.name)
+        if m:
+            found.append({"path": p.relative_to(root).as_posix(), "layer": int(m.group(1)), "name": m.group(2)})
+    return sorted(found, key=lambda s: (s["layer"], s["name"]))
 
 class Models:
     """Load each model on first use, and keep the most recent keep of them (2: enough
@@ -91,6 +104,22 @@ class Models:
     def __init__(self, root=ROOT, device="cpu", keep=2):
         self.root, self.device, self.keep = root.resolve(), device, keep
         self.cache, self.lock = OrderedDict(), threading.RLock()
+        self.saes = {}
+
+    def get_sae(self, name):
+        """(sae, layer, examples) for checkpoints/sae/<name>. examples is each feature's top
+           contexts from tools/sae.py, or None if they were not saved. An SAE is ~20 MB, so
+           all the ones asked for stay loaded."""
+        path = (self.root / name).resolve()
+        if path.suffix != ".pt" or (self.root / SAES).resolve() not in path.parents or not path.exists():
+            raise ValueError(f"No SAE {name!r} in {self.root / SAES}")
+        with self.lock:
+            if path not in self.saes:
+                model_sae, info = sae_tools.load(path, self.device)
+                saved = sae_tools.examples_path(path)
+                examples = json.loads(saved.read_text())["features"] if saved.exists() else None
+                self.saes[path] = (model_sae, info["layer"], examples)
+            return self.saes[path]
 
     def get(self, name):
         path = (self.root / name).resolve()
@@ -421,6 +450,38 @@ def neuron_map(model, ids, layer, start, end, lock=None, ablate=(), top=64, thre
         free_cache(device)
     return start, [round(x, 4) for x in active], index.tolist(), acts
 
+@torch.no_grad()
+def feature_map(model, sae, layer, ids, start, end, lock=None, ablate=(), top=48):
+    """The SAE's features on positions start..end-1, from the residual stream after block
+    layer: (start, index, acts), as neuron_map gives for neurons. Only the top features
+    with the highest peak are kept: index[k] is a feature's number, acts[k][r] its value
+    at start + r. The first position the model sees is 0: the SAE was never trained on it
+    (tools/sae.stream), and its vector is much larger than the rest."""
+    lock = lock or threading.RLock()
+    if not 0 <= layer < len(model.blocks):
+        raise ValueError(f"No layer {layer}")
+    first, start, end = view(model, ids, start, end)
+    device = next(model.parameters()).device
+    kept = {}
+
+    def hook(module, inputs, output):
+        kept["x"] = output[0, start - first:]                                 # (W, C)
+
+    with lock, ablated(model, ablate):
+        handle = model.blocks[layer].register_forward_hook(hook)
+        try:
+            model(torch.tensor([ids[first:end]], device=device), last_only=True)
+        finally:
+            handle.remove()
+        f = sae.encode(kept["x"].float())                                     # (W, M)
+        if start == first:
+            f[0] = 0
+        index = f.max(dim=0).values.topk(min(top, f.shape[1])).indices
+        index = index[f[:, index].max(dim=0).values > 0]                     # (only features that fired)
+        acts = [[round(x, 3) for x in row] for row in f[:, index].t().tolist()]
+        free_cache(device)
+    return start, index.tolist(), acts
+
 # ---------- the server ----------
 class Handler(BaseHTTPRequestHandler):
     models = None       # set by make_server
@@ -464,6 +525,8 @@ class Handler(BaseHTTPRequestHandler):
                 offset, weights = attention_from(model, [int(i) for i in req["ids"]], int(req["t"]), self.models.lock,
                                                  parse_heads(req.get("ablate"), model))
                 return self.send_json({"offset": offset, "weights": weights})
+            if self.path == "/api/features":
+                return self.features(req)
             if self.path in ("/api/lens", "/api/matrix", "/api/headmap", "/api/neurons"):
                 model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
                 ids, off = [int(i) for i in req["ids"]], parse_heads(req.get("ablate"), model)
@@ -483,6 +546,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "not found"}, 404)
         except (ValueError, KeyError, TypeError) as e:
             self.send_json({"error": str(e)}, 400)
+
+    def features(self, req):
+        """The SAEs for this model, and the features of the one asked for (or the first) on the
+           window. With no SAE, only the empty list: the page then says how to train one."""
+        model = self.models.get(req["model"])
+        saes = list_saes(self.models.root, req["model"])
+        if not saes:
+            return self.send_json({"saes": []})
+        name = req.get("sae") or saes[0]["path"]
+        if name not in [s["path"] for s in saes]:
+            raise ValueError(f"No SAE {name!r} for {req['model']}")
+        sae, layer, examples = self.models.get_sae(name)
+        start, index, acts = feature_map(model, sae, layer, [int(i) for i in req["ids"]], int(req["start"]),
+                                         int(req["end"]), self.models.lock, parse_heads(req.get("ablate"), model))
+        return self.send_json({"saes": saes, "sae": name, "layer": layer, "start": start, "index": index,
+                               "acts": acts, "examples": {i: examples[i] for i in index} if examples else {}})
 
     def generate(self, req):
         """Stream one JSON object per line: start, then one per token, then end."""

@@ -73,6 +73,8 @@
   .card.attn-on .tokens span { background: color-mix(in oklab, var(--attn) calc(var(--w, 0) * 90%), transparent); }
   .card.attn-on .tokens span.from { outline: 2px solid var(--attn); outline-offset: 1px; }
   .card.attn-on .tokens span.out { opacity: .35; }
+  /* A pinned SAE feature: each token shaded by how strongly the feature fires on it. */
+  .card.feat-on .tokens span { background: color-mix(in oklab, var(--hot) calc(var(--f, 0) * 85%), transparent); }
 
   .attn { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
   .attn-title { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
@@ -127,6 +129,14 @@
   .lens td.hit { outline: 1.5px solid var(--text); outline-offset: -1.5px; }
   .pickers { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
   .viz canvas { display: block; image-rendering: pixelated; cursor: crosshair; }
+  .examples { margin-top: 10px; font-size: 12px; }
+  .examples .ex { font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: var(--muted); padding: 1px 0; }
+  .examples .ex .v { display: inline-block; width: 44px; text-align: right; margin-right: 8px; }
+  .examples .ex b, #tip .ex b { color: var(--text); font-weight: 600; border-radius: 3px; padding: 0 1px;
+    background: color-mix(in oklab, var(--hot) 45%, transparent); }
+  #tip .ex { font-family: var(--mono); font-size: 11px; color: var(--muted); max-width: 420px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hm { display: flex; flex-wrap: wrap; gap: 14px 22px; }
   .hm .g { display: grid; gap: 2px; font: 10px var(--mono); }
   .hm .g .lab { color: var(--muted); display: flex; align-items: center; justify-content: center; }
@@ -296,7 +306,7 @@ $("question").addEventListener("keydown", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) mode === "chat" ? send() : generate();
-  if (e.key === "Escape") document.querySelectorAll(".card").forEach(clearAttention);
+  if (e.key === "Escape") document.querySelectorAll(".card").forEach(el => { clearAttention(el); clearFeature(el); });
 });
 
 // ---------- ablation ----------
@@ -360,7 +370,8 @@ function newCard(model, parent = $("cards"), label = "") {
       <button class="link" data-viz="lens">Logit lens</button>
       <button class="link" data-viz="matrix">Attention matrix</button>
       <button class="link" data-viz="heads">Head map</button>
-      <button class="link" data-viz="neurons">Neurons</button></div>
+      <button class="link" data-viz="neurons">Neurons</button>
+      <button class="link" data-viz="features">Features</button></div>
     <div class="viz hidden"></div>`;
   el.querySelector(".name").textContent = model + label;
   parent.append(el);
@@ -538,6 +549,7 @@ function topOf(card, w, k) {
 function showAttention(card) {
   const { t, offset, weights } = card.attn;
   const [L, H] = card.head;
+  clearFeature(card.el);
   card.el.classList.add("attn-on");
   for (const s of card.el.querySelectorAll(".tokens span")) {
     const i = +s.dataset.index;
@@ -617,6 +629,7 @@ async function showViz(card, kind, opts = {}) {
     else if (kind === "lens") await lens(card, panel);
     else if (kind === "matrix") await matrix(card, panel, opts);
     else if (kind === "neurons") await neurons(card, panel, opts);
+    else if (kind === "features") await features(card, panel, opts);
     else await headMap(card, panel);
   } catch (e) {
     panel.innerHTML = `<div class="error"></div>`;
@@ -814,6 +827,85 @@ async function neurons(card, panel, opts) {
       <div>activation ${a[k][c].toFixed(3)}</div>`, e);
   };
   cv.onmouseleave = hideTip;
+}
+
+// The features of a sparse autoencoder (tools/sae.py) on the residual stream after one
+// block: like Neurons, but each row is one feature, and the tooltip shows the texts it
+// fires on most in the training data. Click a row to pin the feature: its examples are
+// listed below, and the text above is shaded by how strongly it fires on each token.
+async function features(card, panel, opts) {
+  const n = card.ids.length, start = Math.max(0, n - 64);
+  const data = await post("/api/features", { model: card.model, ids: card.ids, start, end: n,
+                                             sae: opts.sae ?? card.sae, ablate: card.ablate || [] });
+  if (!data.saes.length) {
+    panel.innerHTML = `<h4>Features</h4><div class="hint">No sparse autoencoder for this model yet. Train one with
+      <code>python -m tools.sae train --checkpoint checkpoints/${esc(card.model)} --layer 3</code></div>`;
+    return;
+  }
+  card.sae = data.sae;
+  const a = data.acts, s = data.start, K = a.length;
+  const name = x => `layer ${x.layer}, ${x.name.replace("_", ", ")}`;
+  panel.innerHTML = `<h4>Features: layer ${data.layer}</h4>
+    <div class="sub">Row: a feature of the sparse autoencoder (the ${K} with the highest peak on this text, strongest first).
+    Column: a token. Hover for the texts a feature fires on most; click to pin it and shade the text by it.</div>
+    <div class="pickers"><label>SAE <select class="ps">${data.saes.map(x =>
+      `<option value="${esc(x.path)}" ${x.path === data.sae ? "selected" : ""}>${esc(name(x))}</option>`).join("")}</select></label>
+    <span class="hint">last ${a[0]?.length ?? 0} tokens</span></div><canvas></canvas><div class="examples"></div>`;
+  panel.querySelector(".ps").onchange = () => showViz(card, "features", { keep: true, sae: panel.querySelector(".ps").value });
+  if (!K) { panel.querySelector("canvas").remove(); return; }
+  const W = a[0].length, cell = Math.max(4, Math.min(14, Math.floor(620 / W)));
+  const peak = Math.max(...a.map(r => Math.max(...r)), 1e-6);
+  const cv = panel.querySelector("canvas"), dpr = devicePixelRatio || 1, w = W * cell, h = K * cell;
+  cv.width = w * dpr; cv.height = h * dpr;
+  cv.style.width = w + "px"; cv.style.height = h + "px";
+  const g = cv.getContext("2d");
+  g.scale(dpr, dpr);
+  g.fillStyle = cssVar("--bg"); g.fillRect(0, 0, w, h);
+  g.fillStyle = cssVar("--hot");
+  a.forEach((row, r) => {
+    const top = Math.max(...row);                       // each row shaded against its own peak
+    for (let c = 0; c < W; c++) {
+      if (row[c] <= 0) continue;
+      g.globalAlpha = Math.min(1, row[c] / top);
+      g.fillRect(c * cell, r * cell, cell - (cell > 6 ? 1 : 0), cell - (cell > 6 ? 1 : 0));
+    }
+  });
+  g.globalAlpha = 1;
+  const examples = i => data.examples[i] || [];
+  const line = ([v, left, here, right]) =>
+    `…${esc(left.slice(-48))}<b>${esc(here)}</b>${esc(right)}`;
+  const at = e => {
+    const rct = cv.getBoundingClientRect();
+    const r = Math.floor((e.clientY - rct.top) / cell), c = Math.floor((e.clientX - rct.left) / cell);
+    return r < 0 || r >= K || c < 0 || c >= W ? null : [r, c];
+  };
+  cv.onmousemove = e => {
+    const p = at(e);
+    if (!p) return hideTip();
+    const [r, c] = p, i = data.index[r];
+    showTip(`<div>feature <b>${i}</b> on <b>${esc(JSON.stringify(card.tokens[s + c].piece))}</b>: ${a[r][c].toFixed(2)}</div>
+      ${examples(i).slice(0, 4).map(x => `<div class="ex">${line(x)}</div>`).join("")
+        || `<div class="hint">No saved examples: run python -m tools.sae show on this SAE.</div>`}`, e);
+  };
+  cv.onmouseleave = hideTip;
+  cv.onclick = e => {
+    const p = at(e);
+    if (!p) return;
+    const [r] = p, i = data.index[r], top = Math.max(...a[r]);
+    clearAttention(card.el);
+    card.el.classList.add("feat-on");
+    for (const span of card.el.querySelectorAll(".tokens span")) {
+      const j = +span.dataset.index - s;
+      span.style.setProperty("--f", j >= 0 && j < W ? Math.max(0, a[r][j] / top).toFixed(3) : 0);
+    }
+    panel.querySelector(".examples").innerHTML = `<h4>Feature ${i}</h4>
+      <div class="sub">The texts it fires on most (validation stories). Esc clears the shading.</div>
+      ${examples(i).map(x => `<div class="ex"><span class="v">${x[0].toFixed(2)}</span>${line(x)}</div>`).join("")}`;
+  };
+}
+
+function clearFeature(el) {
+  el.classList.remove("feat-on");
 }
 
 init();
