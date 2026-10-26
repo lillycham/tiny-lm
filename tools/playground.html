@@ -834,7 +834,10 @@ async function neurons(card, panel, opts) {
 // fires on most in the training data. Click a row to pin the feature: its examples are
 // listed below, and the text above is shaded by how strongly it fires on each token.
 async function features(card, panel, opts) {
-  const n = card.ids.length, start = Math.max(0, n - 64);
+  // The last 64 tokens fit the panel. The whole text (up to the model's block; the server
+  // clamps start) scrolls sideways. Either way, each token's features see all the text before it.
+  const whole = card.featWhole = opts.whole ?? card.featWhole ?? false;
+  const n = card.ids.length, start = whole ? 0 : Math.max(0, n - 64);
   const data = await post("/api/features", { model: card.model, ids: card.ids, start, end: n,
                                              sae: opts.sae ?? card.sae, ablate: card.ablate || [] });
   if (!data.saes.length) {
@@ -850,10 +853,13 @@ async function features(card, panel, opts) {
     Column: a token. Hover for the texts a feature fires on most; click to pin it and shade the text by it.</div>
     <div class="pickers"><label>SAE <select class="ps">${data.saes.map(x =>
       `<option value="${esc(x.path)}" ${x.path === data.sae ? "selected" : ""}>${esc(name(x))}</option>`).join("")}</select></label>
-    <span class="hint">last ${a[0]?.length ?? 0} tokens</span></div><canvas></canvas><div class="examples"></div>`;
+    <label><input type="checkbox" class="pw" ${whole ? "checked" : ""}> Whole text</label>
+    <span class="hint">${whole ? "all" : "last"} ${a[0]?.length ?? 0} tokens</span></div>
+    <canvas></canvas><div class="examples"></div>`;
   panel.querySelector(".ps").onchange = () => showViz(card, "features", { keep: true, sae: panel.querySelector(".ps").value });
+  panel.querySelector(".pw").onchange = () => showViz(card, "features", { keep: true, whole: panel.querySelector(".pw").checked });
   if (!K) { panel.querySelector("canvas").remove(); return; }
-  const W = a[0].length, cell = Math.max(4, Math.min(14, Math.floor(620 / W)));
+  const W = a[0].length, cell = whole ? 10 : Math.max(4, Math.min(14, Math.floor(620 / W)));
   const peak = Math.max(...a.map(r => Math.max(...r)), 1e-6);
   const cv = panel.querySelector("canvas"), dpr = devicePixelRatio || 1, w = W * cell, h = K * cell;
   cv.width = w * dpr; cv.height = h * dpr;
