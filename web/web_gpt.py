@@ -40,7 +40,8 @@ def steps_for(tokens, B, block, accum=1):
 def count(model):
     """(all parameters, the ones outside the embeddings). Chinchilla counts the second."""
     total = sum(p.numel() for p in model.parameters())
-    return total, total - model.tok.weight.numel() - model.pos.weight.numel()
+    positions = 0 if model.pos is None else model.pos.weight.numel()      # a rope model has no table
+    return total, total - model.tok.weight.numel() - positions
 
 def continue_text(model, tok, start, temperature=0.8, n=150):
     return start + gpt.generate(model, n, start, temperature, tok.encode, tok.decode, stop=EOT_ID)

@@ -228,8 +228,8 @@ def attention_from(model, ids, t, lock=None, ablate=()):
         def hook(module, inputs, output):
             x = inputs[0]
             q, k, _ = module.qkv(x).split(x.shape[-1], dim=-1)
-            q = module.split_heads(q)[:, :, -1:]                      # (1, H, 1, hs)
-            k = module.smear_keys(module.split_heads(k))              # (1, H, T, hs)
+            q, k = module.rotate(module.split_heads(q), module.smear_keys(module.split_heads(k)))
+            q = q[:, :, -1:]                                          # (1, H, 1, hs); k is (1, H, T, hs)
             rows[i] = F.softmax(q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1]), dim=-1)[0, :, 0]
         return hook
 
@@ -261,7 +261,7 @@ def view(model, ids, start, end):
 def query_key(module, x):
     """A CausalSelfAttention's q and k, (B, H, T, hs), as its forward makes them."""
     q, k, _ = module.qkv(x).split(x.shape[-1], dim=-1)
-    return module.split_heads(q), module.smear_keys(module.split_heads(k))
+    return module.rotate(module.split_heads(q), module.smear_keys(module.split_heads(k)))
 
 def causal_weights_for(q, k, rows):
     """Softmax attention weights of query positions rows (a slice of 0..T) against every

@@ -66,6 +66,31 @@ class KVCache:
         for layer in self.layers:
             layer.k, layer.v = layer.k.repeat(n, 1, 1, 1), layer.v.repeat(n, 1, 1, 1)
 
+def rope_tables(block, hs, base=10000.0):
+    """cos and sin of the turning angle of every position, each (block, hs).
+
+    RoPE (rotary position embedding, Su et al., 2021) turns every pair of numbers in a query
+    or key by an angle that grows with the position. The dot product of a query at position
+    m and a key at position n then depends on m - n, the distance, and not on m and n
+    themselves. So the model needs no table of position vectors.
+
+    The pairs are (x[i], x[i + hs/2]). Pair i turns by position * base^(-2i/hs): fast for
+    the first pairs and slow for the last, like the hands of a clock.
+    """
+    speed = base ** (-torch.arange(0, hs, 2).float() / hs)      # (hs/2,): one turning speed per pair
+    angle = torch.arange(block).float()[:, None] * speed        # (block, hs/2)
+    angle = torch.cat([angle, angle], dim=-1)                   # (block, hs): the two halves of a pair share it
+    return angle.cos(), angle.sin()
+
+def rotate_half(x):
+    """(a, b) -> (-b, a) for the two halves of the last axis: a quarter turn of every pair."""
+    a, b = x.chunk(2, dim=-1)
+    return torch.cat([-b, a], dim=-1)
+
+def apply_rope(x, cos, sin):
+    """Turn every pair of x (..., T, hs) by its angle: (a, b) -> (a cos - b sin, b cos + a sin)."""
+    return x * cos + rotate_half(x) * sin
+
 class CausalSelfAttention(nn.Module):
     """All the heads of MultiHeadAttention, computed together.
 
@@ -79,7 +104,7 @@ class CausalSelfAttention(nn.Module):
     use the last two axes, so every axis in front is treated as a batch axis.
     """
 
-    def __init__(self, C, n_head, dropout=0.0, smear=False, qkv_bias=False):
+    def __init__(self, C, n_head, dropout=0.0, smear=False, qkv_bias=False, rope=False, block=None):
         super().__init__()
         self.n_head = n_head
         # One layer for q, k and v of every head: C in, 3 * C out.
@@ -89,6 +114,14 @@ class CausalSelfAttention(nn.Module):
         self.smear = smear
         if smear:
             self.a = nn.Parameter(torch.full((n_head,), 0.0))
+        self.rope = rope
+        if rope:
+            if block is None or (C // n_head) % 2:
+                raise ValueError("rope needs the block size, and an even head size: it turns pairs of numbers")
+            cos, sin = rope_tables(block, C // n_head)
+            # Buffers, not parameters: nothing to train. Not in the checkpoint either: they are rebuilt.
+            self.register_buffer("cos", cos, persistent=False)
+            self.register_buffer("sin", sin, persistent=False)
 
     def split_heads(self, t):
         """(B, T, C) -> (B, n_head, T, hs), where hs = C // n_head."""
@@ -119,6 +152,9 @@ class CausalSelfAttention(nn.Module):
         q, k, v = self.split_heads(q), self.split_heads(k), self.split_heads(v)
 
         k = self.smear_keys(k)
+        # Turn q and k by their positions. With a cache, the new tokens come after the cached
+        # ones. Keys are stored turned, so a cached key is never turned a second time.
+        q, k = self.rotate(q, k, cache.k.shape[2] if past else 0)
 
         if cache is not None:
             # TODO(Lilly): put the cached keys and values in front of the new ones, and
@@ -144,13 +180,49 @@ class CausalSelfAttention(nn.Module):
             k = s * k  + (1 - s) * k_prev
         return k
 
-class FeedForward(nn.Module):
-    """As in transformer.py, with dropout at the end, and GELU in place of ReLU if gelu."""
+    def rotate(self, q, k, start=0):
+        """RoPE for q and k, both (B, n_head, T, hs): turn the pair at position p by an angle that
+        grows with p. start is the position of the first token, which is not 0 with a cache.
+        Without rope, q and k come back as they are."""
+        if not self.rope:
+            return q, k
+        T = q.shape[2]
+        if start + T > self.cos.shape[0]:
+            raise ValueError(f"positions {start} to {start + T} are past the block of {self.cos.shape[0]}")
+        cos, sin = self.cos[start:start + T].to(q.dtype), self.sin[start:start + T].to(q.dtype)
+        return apply_rope(q, cos, sin), apply_rope(k, cos, sin)
 
-    def __init__(self, C, dropout, gelu=False):
+class GatedAct(nn.Module):
+    """The middle of SwiGLU. One tensor holds the gate and the value side by side, (..., 2H):
+    silu(gate) * value gives (..., H). That is the hidden layer, where the GELU feed-forward has
+    its activation, so a hook on net[1] sees the same thing in both."""
+
+    def forward(self, x):
+        gate, value = x.chunk(2, dim=-1)
+        return F.silu(gate) * value
+
+def swiglu_hidden(C):
+    """The hidden size H that keeps the weights of a 4C GELU feed-forward: three C x H matrices
+    against two C x 4C, so H = 8C/3, rounded to a multiple of 8."""
+    return max(1, round(8 * C / 3 / 8)) * 8
+
+class FeedForward(nn.Module):
+    """As in transformer.py, with dropout at the end, and GELU in place of ReLU if gelu.
+
+    With swiglu (Shazeer, 2020), as in Llama: silu(x Wg) * (x Wv), then Wd. The gate decides how much
+    of each hidden number gets through. One Linear makes the gate and the value together, and none
+    of the three has a bias. swiglu replaces the activation, so gelu does nothing with it.
+    """
+
+    def __init__(self, C, dropout, gelu=False, swiglu=False):
         super().__init__()
-        act = nn.GELU(approximate="tanh") if gelu else nn.ReLU()
-        self.net = nn.Sequential(nn.Linear(C, 4 * C), act, nn.Linear(4 * C, C), nn.Dropout(dropout))
+        if swiglu:
+            H = swiglu_hidden(C)
+            self.net = nn.Sequential(nn.Linear(C, 2 * H, bias=False), GatedAct(),
+                                     nn.Linear(H, C, bias=False), nn.Dropout(dropout))
+        else:
+            act = nn.GELU(approximate="tanh") if gelu else nn.ReLU()
+            self.net = nn.Sequential(nn.Linear(C, 4 * C), act, nn.Linear(4 * C, C), nn.Dropout(dropout))
 
     def forward(self, x):
         return self.net(x)
@@ -158,12 +230,13 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """As in transformer.py, with the faster attention."""
 
-    def __init__(self, C, n_head, dropout, gelu=False, smear=False, qkv_bias=False):
+    def __init__(self, C, n_head, dropout, gelu=False, smear=False, qkv_bias=False, swiglu=False, rope=False,
+                 block=None):
         super().__init__()
         self.ln1 = nn.LayerNorm(C)
-        self.attn = CausalSelfAttention(C, n_head, dropout, smear=smear, qkv_bias=qkv_bias)
+        self.attn = CausalSelfAttention(C, n_head, dropout, smear=smear, qkv_bias=qkv_bias, rope=rope, block=block)
         self.ln2 = nn.LayerNorm(C)
-        self.ffwd = FeedForward(C, dropout, gelu)
+        self.ffwd = FeedForward(C, dropout, gelu, swiglu)
 
     def forward(self, x, cache=None):
         x = x + self.attn(self.ln1(x), cache)
@@ -180,19 +253,26 @@ class GPT(nn.Module):
     for improved capabilities.
     qkv_bias: a bias on q, k and v, as OpenAI's GPT-2 has. Only for loading GPT-2
     (tools/gpt2.py); our models train without it.
+    rope: rotary position embeddings in place of the table of learned position vectors, so
+    `pos` is None. swiglu: a gated feed-forward with the same number of weights. Neither
+    is GPT-2 compatible. Old checkpoints have neither key, and load as False.
     """
 
     def __init__(self, block, emb, heads, layers, dropout, vocab=V, gelu=False,
-                  tied=False, smear=False, scaled_init=False, qkv_bias=False):
+                  tied=False, smear=False, scaled_init=False, qkv_bias=False, rope=False, swiglu=False):
         super().__init__()
         self.config = dict(block=block, emb=emb, heads=heads, layers=layers, dropout=dropout, vocab=vocab,
-                           gelu=gelu, tied=tied, smear=smear, scaled_init=scaled_init, qkv_bias=qkv_bias)
+                           gelu=gelu, tied=tied, smear=smear, scaled_init=scaled_init, qkv_bias=qkv_bias,
+                           rope=rope, swiglu=swiglu)
         self.block = block
         self.tok = nn.Embedding(vocab, emb)
-        self.pos = nn.Embedding(block, emb)
-        nn.init.normal_(self.pos.weight, std=0.02)
+        # With rope, a token's position is in how q and k turn, so there is no table of positions.
+        self.pos = None if rope else nn.Embedding(block, emb)
+        if self.pos is not None:
+            nn.init.normal_(self.pos.weight, std=0.02)
         self.drop = nn.Dropout(dropout)
-        self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu, smear, qkv_bias) for _ in range(layers)])
+        self.blocks = nn.Sequential(*[Block(emb, heads, dropout, gelu, smear, qkv_bias, swiglu, rope, block)
+                                      for _ in range(layers)])
         self.ln = nn.LayerNorm(emb)
 
         if tied:
@@ -206,7 +286,8 @@ class GPT(nn.Module):
             for b in self.blocks:
                 for layer in (b.attn.proj, b.ffwd.net[2]):
                     nn.init.normal_(layer.weight, std=0.02 / math.sqrt(2 * layers))
-                    nn.init.zeros_(layer.bias)
+                    if layer.bias is not None:      # SwiGLU's Linear layers have none
+                        nn.init.zeros_(layer.bias)
 
     def forward(self, X, last_only=False, cache=None):
         """X (B, T) IDs -> logits (B, T, V). With last_only, only the last position's,
@@ -219,7 +300,9 @@ class GPT(nn.Module):
             # TODO(Lilly): the tokens in X come after the cache.length tokens already seen.
             #   Set first, the position of X's first token.
             raise NotImplementedError
-        x = self.tok(X) + self.pos(torch.arange(first, first + X.shape[1], device=X.device))
+        x = self.tok(X)
+        if self.pos is not None:        # with rope, each attention layer turns q and k itself
+            x = x + self.pos(torch.arange(first, first + X.shape[1], device=X.device))
         x = self.drop(x)
         for i, block in enumerate(self.blocks):
             x = block(x, None if cache is None else cache.layers[i])

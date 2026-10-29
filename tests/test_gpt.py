@@ -22,7 +22,11 @@ from stories.instruct_sft import output_path as instruct_path
 from stories.stories_gpt import TOKENS, fine_tuned_path
 
 TINY = dict(block=16, emb=12, heads=3, layers=2, dropout=0.0, vocab=50)
-OPTIONS = [dict(gelu=g, tied=t, smear=s, scaled_init=i) for g, t, s, i in itertools.product([False, True], repeat=4)]
+FLAGS = ("gelu", "tied", "smear", "scaled_init", "rope", "swiglu")
+# Every combination of the first four, then rope and swiglu on top of the GPT-2 settings, with and without smear.
+OPTIONS = [dict(zip(FLAGS, on), rope=False, swiglu=False) for on in itertools.product([False, True], repeat=4)]
+OPTIONS += [dict(gelu=True, tied=True, smear=s, scaled_init=True, rope=r, swiglu=w)
+            for s in (False, True) for r, w in [(True, False), (False, True), (True, True)]]
 CHECKPOINTS = Path(__file__).parent.parent / "checkpoints"
 
 def name(options):
@@ -53,16 +57,106 @@ def test_options_build_that_model(options):
     smear_weights = [n for n, _ in model.named_parameters() if n.endswith("attn.a")]
     assert len(smear_weights) == (TINY["layers"] if options["smear"] else 0)
     acts = [type(m) for m in model.modules() if isinstance(m, (nn.GELU, nn.ReLU))]
-    assert acts == [nn.GELU if options["gelu"] else nn.ReLU] * TINY["layers"]
+    assert acts == ([] if options["swiglu"] else [nn.GELU if options["gelu"] else nn.ReLU] * TINY["layers"])
+    assert (model.pos is None) == options["rope"]
     assert (model.out.weight is model.tok.weight) == options["tied"]
     assert (model.out.bias is None) == options["tied"]
 
 def test_old_configs_still_build():
-    """Checkpoints from before vocab, gelu, tied and smear have only the first five keys."""
+    """Checkpoints from before vocab, gelu, tied, smear, rope and swiglu have only the first five keys."""
     old = {k: TINY[k] for k in ("block", "emb", "heads", "layers", "dropout")}
     model = gpt.GPT(**old)
     assert model.config == dict(old, vocab=gpt.V, gelu=False, tied=False, smear=False, scaled_init=False,
-                                 qkv_bias=False)
+                                 qkv_bias=False, rope=False, swiglu=False)
+
+# ---------- RoPE and SwiGLU ----------
+def rope_attention():
+    torch.manual_seed(0)
+    return gpt.CausalSelfAttention(12, 3, rope=True, block=32)     # head size 4: two pairs
+
+def test_rope_scores_depend_on_the_distance():
+    """The point of RoPE: q . k for a query at m and a key at n is the same when both move by the same step."""
+    attn = rope_attention()
+    torch.manual_seed(1)
+    q, k = torch.randn(1, 3, 1, 4), torch.randn(1, 3, 1, 4)
+    turned = lambda x, p: attn.rotate(x, x, start=p)[0]
+    score = lambda m, n: (turned(q, m) * turned(k, n)).sum(-1)
+    assert torch.allclose(score(5, 2), score(9, 6), atol=1e-5)
+    assert torch.allclose(score(5, 2), score(25, 22), atol=1e-4)
+    assert not torch.allclose(score(5, 2), score(5, 3), atol=1e-3)         # another distance, another score
+
+def test_rope_is_a_turn():
+    """A turn keeps the length of every vector, and at position 0 it does nothing."""
+    attn = rope_attention()
+    torch.manual_seed(1)
+    x = torch.randn(2, 3, 8, 4)
+    y, _ = attn.rotate(x, x)
+    assert torch.allclose(y.norm(dim=-1), x.norm(dim=-1), atol=1e-5)
+    assert torch.equal(y[:, :, 0], x[:, :, 0])
+
+def test_rope_matches_complex_numbers():
+    """The same turn as multiplying a + ib by e^(i angle), for the pairs (x[i], x[i + hs/2])."""
+    attn, hs, T = rope_attention(), 4, 6
+    torch.manual_seed(1)
+    x = torch.randn(1, 1, T, hs)
+    z = torch.complex(x[..., :hs // 2], x[..., hs // 2:])
+    angle = torch.arange(T)[:, None] * 10000.0 ** (-torch.arange(0, hs, 2) / hs)
+    turned = z * torch.polar(torch.ones_like(angle), angle)
+    assert torch.allclose(attn.rotate(x, x)[0], torch.cat([turned.real, turned.imag], dim=-1), atol=1e-5)
+
+def test_rope_model_has_no_position_table():
+    """The table is gone, and the cos and sin tables are not saved: the checkpoint has only weights."""
+    plain, turned = tiny(), tiny(rope=True)
+    assert turned.pos is None
+    gap = sum(p.numel() for p in plain.parameters()) - sum(p.numel() for p in turned.parameters())
+    assert gap == TINY["block"] * TINY["emb"]
+    assert not [key for key in turned.state_dict() if key.endswith(("cos", "sin"))]
+
+def test_rope_is_used():
+    """A model that built the tables but never turned q and k would be the same as one without."""
+    model = tiny(rope=True).eval()
+    X = tokens()
+    with torch.no_grad():
+        with_rope = model(X)
+        for b in model.blocks:
+            b.attn.rope = False
+        assert not torch.allclose(with_rope, model(X))
+
+def test_rope_needs_an_even_head_size():
+    with pytest.raises(ValueError):
+        gpt.GPT(**dict(TINY, emb=15), rope=True)         # 3 heads of 5
+
+def test_rope_refuses_positions_past_the_block():
+    attn = rope_attention()
+    x = torch.randn(1, 3, 4, 4)
+    with pytest.raises(ValueError):
+        attn.rotate(x, x, start=30)
+
+@pytest.mark.parametrize("C", [192, 384, 768])
+def test_swiglu_keeps_the_number_of_weights(C):
+    """Three C x H matrices against two C x 4C. With H = 8C/3 the weights are the same."""
+    weights = lambda ff: sum(m.weight.numel() for m in ff.modules() if isinstance(m, nn.Linear))
+    assert weights(gpt.FeedForward(C, 0.0, swiglu=True)) == weights(gpt.FeedForward(C, 0.0, gelu=True))
+
+def test_swiglu_formula():
+    """silu(x Wg) * (x Wv), then Wd. The fused layer holds Wg on top of Wv: the gate comes first."""
+    torch.manual_seed(0)
+    ff = gpt.FeedForward(12, 0.0, swiglu=True).eval()
+    x = torch.randn(2, 5, 12)
+    H = gpt.swiglu_hidden(12)
+    W, Wd = ff.net[0].weight, ff.net[2].weight
+    gate, value = x @ W[:H].T, x @ W[H:].T
+    assert torch.allclose(ff(x), (F.silu(gate) * value) @ Wd.T, atol=1e-5)
+
+def test_swiglu_hook_point_is_the_hidden_layer():
+    """interp.py and the playground hook ffwd.net[1] to show the neurons. In SwiGLU that is the hidden layer."""
+    model = tiny(swiglu=True).eval()
+    seen = []
+    handle = model.blocks[0].ffwd.net[1].register_forward_hook(lambda module, inputs, output: seen.append(output.shape))
+    with torch.no_grad():
+        model(tokens())
+    handle.remove()
+    assert seen == [(2, TINY["block"], gpt.swiglu_hidden(TINY["emb"]))]
 
 # ---------- training ----------
 @with_options

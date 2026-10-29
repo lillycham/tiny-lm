@@ -21,6 +21,12 @@ The smeared-key test: the default size with the current code, then with --smear.
     python -m stories.stories_gpt --tag control     # checkpoints/stories/stories_gpt_192w6l_control.pt
     python -m stories.stories_gpt --smear           # checkpoints/stories/stories_gpt_192w6l_smear.pt
     python -m stories.stories_gpt --smear --seed 1  # checkpoints/stories/stories_gpt_192w6l_smear_seed1.pt
+
+RoPE and SwiGLU, one change at a time against the same control (neither is GPT-2 compatible):
+
+    python -m stories.stories_gpt --rope            # checkpoints/stories/stories_gpt_192w6l_rope.pt
+    python -m stories.stories_gpt --swiglu          # checkpoints/stories/stories_gpt_192w6l_swiglu.pt
+    python -m stories.stories_gpt --rope --swiglu   # checkpoints/stories/stories_gpt_192w6l_rope_swiglu.pt
 """
 import argparse
 import math
@@ -63,6 +69,10 @@ if __name__ == "__main__":
     for name in ("emb", "heads", "layers"):
         parser.add_argument(f"--{name}", type=int, default=CONFIG[name], help=f"default {CONFIG[name]}")
     parser.add_argument("--smear", action="store_true", help="smeared keys (not GPT-2 compatible)")
+    parser.add_argument("--rope", action="store_true",
+                        help="rotary position embeddings in place of learned positions (not GPT-2 compatible)")
+    parser.add_argument("--swiglu", action="store_true",
+                        help="a SwiGLU feed-forward with the same number of weights (not GPT-2 compatible)")
     parser.add_argument("--tag", help="a label for the checkpoint name, e.g. control")
     parser.add_argument("--snapshots", action="store_true",
                         help="also save the model at steps 64, 128, 256, ... in checkpoints/stories/snapshots/")
@@ -71,14 +81,17 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0,
                         help="random seed for the starting weights and the batches (default 0)")
     args = parser.parse_args()
-    config = dict(CONFIG, emb=args.emb, heads=args.heads, layers=args.layers, smear=args.smear)
+    config = dict(CONFIG, emb=args.emb, heads=args.heads, layers=args.layers, smear=args.smear,
+                  rope=args.rope, swiglu=args.swiglu)
     # The default model keeps its old checkpoint name, so main.py finds it. Others get their sizes
-    # in the name, then _smear and the tag if given: stories_gpt_192w6l_smear.pt.
+    # in the name, then _smear, _rope, _swiglu and the tag if given: stories_gpt_192w6l_smear.pt.
     sizes = (config["emb"], config["heads"], config["layers"])
-    if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) and not (args.smear or args.tag or args.seed):
+    changed = args.smear or args.rope or args.swiglu or args.tag or args.seed
+    if sizes == (CONFIG["emb"], CONFIG["heads"], CONFIG["layers"]) and not changed:
         out = CHECKPOINT
     else:
-        name = (f"stories_gpt_{sizes[0]}w{sizes[2]}l" + "_smear" * args.smear + (f"_{args.tag}" if args.tag else "")
+        name = (f"stories_gpt_{sizes[0]}w{sizes[2]}l" + "_smear" * args.smear + "_rope" * args.rope
+                + "_swiglu" * args.swiglu + (f"_{args.tag}" if args.tag else "")
                 + (f"_seed{args.seed}" if args.seed else ""))
         out = CHECKPOINT.with_name(name + ".pt")
     resume = out.with_suffix(".resume.pt")
