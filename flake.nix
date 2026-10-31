@@ -54,6 +54,13 @@
               ln -sfn ${pythonEnv} .python-env
             '';
           };
+          # For tools/hf_export.py and the `hf` upload command.
+          hf = pkgs.mkShell {
+            packages = [
+              (pkgs.python3.withPackages (ps: [ ps.numpy ps.torch ps.pytest ps.safetensors ps.transformers
+                                                ps.tokenizers ps.huggingface-hub ]))
+            ];
+          };
         });
     };
 }
