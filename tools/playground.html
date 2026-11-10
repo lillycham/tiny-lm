@@ -135,6 +135,11 @@
   .examples .ex .v { display: inline-block; width: 44px; text-align: right; margin-right: 8px; }
   .examples .ex b, #tip .ex b { color: var(--text); font-weight: 600; border-radius: 3px; padding: 0 1px;
     background: color-mix(in oklab, var(--hot) 45%, transparent); }
+  .examples .labedit { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  .examples .labedit input { width: 240px; }
+  .examples .labedit button { font: inherit; font-size: 12px; border: 1px solid var(--border);
+    background: var(--bg); color: var(--text); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  #tip .flab { color: var(--accent); font-weight: 600; }
   #tip .ex { font-family: var(--mono); font-size: 11px; color: var(--muted); max-width: 420px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hm { display: flex; flex-wrap: wrap; gap: 14px 22px; }
@@ -878,6 +883,9 @@ async function features(card, panel, opts) {
   });
   g.globalAlpha = 1;
   const examples = i => data.examples[i] || [];
+  const labels = data.labels || {};
+  const rates = data.rates || {};
+  const rate = i => i in rates ? `fires on ${(rates[i] * 100).toFixed(2)}% of tokens` : "";
   const line = ([v, left, here, right]) =>
     `…${esc(left.slice(-48))}<b>${esc(here)}</b>${esc(right)}`;
   const at = e => {
@@ -890,6 +898,8 @@ async function features(card, panel, opts) {
     if (!p) return hideTip();
     const [r, c] = p, i = data.index[r];
     showTip(`<div>feature <b>${i}</b> on <b>${esc(JSON.stringify(card.tokens[s + c].piece))}</b>: ${a[r][c].toFixed(2)}</div>
+      ${labels[i] ? `<div class="flab">${esc(labels[i])}</div>` : ""}
+      ${rate(i) ? `<div class="hint">${rate(i)}</div>` : ""}
       ${examples(i).slice(0, 4).map(x => `<div class="ex">${line(x)}</div>`).join("")
         || `<div class="hint">No saved examples: run python -m tools.sae show on this SAE.</div>`}`, e);
   };
@@ -904,9 +914,20 @@ async function features(card, panel, opts) {
       const j = +span.dataset.index - s;
       span.style.setProperty("--f", j >= 0 && j < W ? Math.max(0, a[r][j] / top).toFixed(3) : 0);
     }
-    panel.querySelector(".examples").innerHTML = `<h4>Feature ${i}</h4>
+    panel.querySelector(".examples").innerHTML = `<h4>Feature ${i}${labels[i] ? `: ${esc(labels[i])}` : ""}</h4>
+      <div class="labedit"><input class="li" value="${esc(labels[i] || "")}" placeholder="name this feature">
+        <button class="lb">Save</button><span class="hint">${rate(i)}</span></div>
       <div class="sub">The texts it fires on most (validation stories). Esc clears the shading.</div>
       ${examples(i).map(x => `<div class="ex"><span class="v">${x[0].toFixed(2)}</span>${line(x)}</div>`).join("")}`;
+    const input = panel.querySelector(".li"), note = panel.querySelector(".labedit .hint");
+    const save = async () => {
+      const got = await post("/api/label", { model: card.model, sae: data.sae, feature: i, label: input.value });
+      labels[i] = got.label;
+      note.textContent = got.label ? "saved" : "cleared";
+      panel.querySelector(".examples h4").textContent = `Feature ${i}${got.label ? `: ${got.label}` : ""}`;
+    };
+    panel.querySelector(".lb").onclick = save;
+    input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); save(); } };
   };
 }
 

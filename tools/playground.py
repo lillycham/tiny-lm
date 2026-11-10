@@ -107,9 +107,9 @@ class Models:
         self.saes = {}
 
     def get_sae(self, name):
-        """(sae, layer, examples) for checkpoints/sae/<name>. examples is each feature's top
-           contexts from tools/sae.py, or None if they were not saved. An SAE is ~20 MB, so
-           all the ones asked for stay loaded."""
+        """(sae, layer, data) for checkpoints/sae/<name>. data is what tools/sae.py saved
+           next to it: each feature's top contexts and firing counts, or None if it was not
+           saved. An SAE is ~20 MB, so all the ones asked for stay loaded."""
         path = (self.root / name).resolve()
         if path.suffix != ".pt" or (self.root / SAES).resolve() not in path.parents or not path.exists():
             raise ValueError(f"No SAE {name!r} in {self.root / SAES}")
@@ -117,8 +117,8 @@ class Models:
             if path not in self.saes:
                 model_sae, info = sae_tools.load(path, self.device)
                 saved = sae_tools.examples_path(path)
-                examples = json.loads(saved.read_text())["features"] if saved.exists() else None
-                self.saes[path] = (model_sae, info["layer"], examples)
+                data = json.loads(saved.read_text()) if saved.exists() else None
+                self.saes[path] = (model_sae, info["layer"], data)
             return self.saes[path]
 
     def get(self, name):
@@ -527,6 +527,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"offset": offset, "weights": weights})
             if self.path == "/api/features":
                 return self.features(req)
+            if self.path == "/api/label":
+                return self.label(req)
             if self.path in ("/api/lens", "/api/matrix", "/api/headmap", "/api/neurons"):
                 model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
                 ids, off = [int(i) for i in req["ids"]], parse_heads(req.get("ablate"), model)
@@ -557,11 +559,25 @@ class Handler(BaseHTTPRequestHandler):
         name = req.get("sae") or saes[0]["path"]
         if name not in [s["path"] for s in saes]:
             raise ValueError(f"No SAE {name!r} for {req['model']}")
-        sae, layer, examples = self.models.get_sae(name)
+        sae, layer, data = self.models.get_sae(name)
+        labels = sae_tools.load_labels(self.models.root / name)
         start, index, acts = feature_map(model, sae, layer, [int(i) for i in req["ids"]], int(req["start"]),
                                          int(req["end"]), self.models.lock, parse_heads(req.get("ablate"), model))
+        counts, seen = (data or {}).get("counts"), (data or {}).get("seen")
         return self.send_json({"saes": saes, "sae": name, "layer": layer, "start": start, "index": index,
-                               "acts": acts, "examples": {i: examples[i] for i in index} if examples else {}})
+                               "acts": acts, "examples": {i: data["features"][i] for i in index} if data else {},
+                               "labels": {i: labels[str(i)] for i in index if str(i) in labels},
+                               "rates": {i: counts[i] / seen for i in index} if counts and seen else {}})
+
+    def label(self, req):
+        """Save one feature's label, from the pinned feature panel. The SAE must be one
+           of this model's, as for features, so a path cannot point anywhere else."""
+        name = req["sae"]
+        if name not in [s["path"] for s in list_saes(self.models.root, req["model"])]:
+            raise ValueError(f"No SAE {name!r} for {req['model']}")
+        i, text = int(req["feature"]), str(req.get("label", ""))
+        sae_tools.set_label(self.models.root / name, i, text)
+        return self.send_json({"feature": i, "label": text.strip()})
 
     def generate(self, req):
         """Stream one JSON object per line: start, then one per token, then end."""

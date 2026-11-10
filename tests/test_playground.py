@@ -399,7 +399,8 @@ def sae_server(tmp_path_factory):
     torch.manual_seed(1)
     path = root / "sae" / "stories_gpt_tiny_L1_x4_k6.pt"
     S.save(S.SAE(C=12, M=48, k=6), path, model=str(root / "stories_gpt_tiny.pt"), layer=1)
-    S.examples_path(path).write_text(json.dumps({"tokens": 10, "features": [[[1.5, "a ", "cat", " sat"]]] * 48}))
+    S.examples_path(path).write_text(json.dumps({"tokens": 10, "seen": 100, "counts": [3] * 48,
+                                                 "features": [[[1.5, "a ", "cat", " sat"]]] * 48}))
     srv = pg.make_server(root, "cpu", port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_port}"
@@ -412,10 +413,25 @@ def test_features_endpoint(sae_server):
     assert len(got["index"]) == len(got["acts"]) and all(len(row) == 5 for row in got["acts"])
     assert set(got["examples"]) == {str(i) for i in got["index"]}
     assert got["examples"][str(got["index"][0])] == [[1.5, "a ", "cat", " sat"]]
+    assert got["labels"] == {} and got["rates"] == {str(i): 0.03 for i in got["index"]}
     assert json.loads(call(sae_server + "/api/features", {**base, "model": "stories_gpt_bare.pt"})) == {"saes": []}
     models = [m["path"] for m in json.loads(call(sae_server + "/api/models"))["models"]]
     assert models == ["stories_gpt_bare.pt", "stories_gpt_tiny.pt"]
     for bad in ["sae/other.pt", "../stories_gpt_tiny.pt"]:
         with pytest.raises(urllib.error.HTTPError) as e:
             call(sae_server + "/api/features", {**base, "model": "stories_gpt_tiny.pt", "sae": bad})
+        assert e.value.code == 400
+
+def test_labels_round_trip_through_the_server(sae_server):
+    """The pinned feature panel names a feature, and the next features view shows the name."""
+    base = {"ids": [1, 2, 3, 1, 2, 3, 4], "start": 2, "end": 7, "model": "stories_gpt_tiny.pt"}
+    got = json.loads(call(sae_server + "/api/features", base))
+    i = got["index"][0]
+    assert got["labels"] == {}
+    saved = json.loads(call(sae_server + "/api/label", {**base, "sae": got["sae"], "feature": i, "label": " cat "}))
+    assert saved == {"feature": i, "label": "cat"}
+    assert json.loads(call(sae_server + "/api/features", base))["labels"] == {str(i): "cat"}
+    for bad in ["sae/other.pt", "../stories_gpt_tiny.pt"]:
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(sae_server + "/api/label", {**base, "sae": bad, "feature": i, "label": "x"})
         assert e.value.code == 400

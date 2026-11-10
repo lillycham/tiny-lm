@@ -227,10 +227,12 @@ def test_generate_batch_checks_the_context():
         gpt.generate_batch(tiny(), [1] * 10, n=2, max_new=7)
 
 # ---------- the real checkpoints ----------
-@pytest.mark.parametrize("path", sorted(p for p in CHECKPOINTS.glob("*/*.pt") if not p.name.endswith(".resume.pt")),
+@pytest.mark.parametrize("path", sorted(p for p in CHECKPOINTS.glob("*/*.pt")
+                                        if not p.name.endswith(".resume.pt") and p.parent.name != "sae"),
                          ids=lambda p: p.name)
 def test_checkpoint_loads(path):
-    """New options once gave every model a parameter that old checkpoints don't have."""
+    """New options once gave every model a parameter that old checkpoints don't have.
+       SAEs look like models by name but are not: tools/sae.py saves them in sae/."""
     gpt.load("cpu", path)
 
 # ---------- run info and snapshots ----------
