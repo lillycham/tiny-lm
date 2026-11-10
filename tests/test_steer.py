@@ -35,6 +35,7 @@ def test_steering_adds_the_vector_at_the_layer():
     plain = S.residuals(model, 1, X)
     pushed = steer.steered(model, 1, vector, 3.0, lambda: S.residuals(model, 1, X))
     assert torch.allclose(pushed - plain, (3.0 * vector).expand_as(plain))
+    assert not model.blocks[1]._forward_hooks                   # (nothing left switched on)
 
 def test_strength_zero_is_the_plain_text_and_only_the_caller_sets_the_dice():
     """The comparison is only worth reading if the dice are held still, so nothing in here

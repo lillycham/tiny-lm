@@ -435,3 +435,23 @@ def test_labels_round_trip_through_the_server(sae_server):
         with pytest.raises(urllib.error.HTTPError) as e:
             call(sae_server + "/api/label", {**base, "sae": bad, "feature": i, "label": "x"})
         assert e.value.code == 400
+
+def test_steering_through_the_server(sae_server):
+    """The feature pinned in a Features view is added to the residual stream while the model
+    writes, so the text changes; a strength of 0 is the model's own text again."""
+    base = {"model": "stories_gpt_tiny.pt", "text": "Once", "max_tokens": 4, "temperature": 0, "seed": 1}
+    sae = "sae/stories_gpt_tiny_L1_x4_k6.pt"
+    ids = lambda lines: [m["id"] for m in (json.loads(l) for l in lines.splitlines()) if m["type"] == "token"]
+
+    plain = call(sae_server + "/api/generate", base)
+    pushed = call(sae_server + "/api/generate", {**base, "steer": {"sae": sae, "feature": 7, "strength": 40}})
+    zero = call(sae_server + "/api/generate", {**base, "steer": {"sae": sae, "feature": 7, "strength": 0}})
+    assert json.loads(plain.splitlines()[0])["steer"] is False
+    assert json.loads(pushed.splitlines()[0])["steer"] is True
+    assert ids(pushed) != ids(plain) and ids(zero) == ids(plain)
+
+    for bad in [{"sae": "sae/other.pt", "feature": 7, "strength": 5},
+                {"sae": sae, "feature": 9999, "strength": 5}]:
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(sae_server + "/api/generate", {**base, "steer": bad})
+        assert e.value.code == 400

@@ -215,6 +215,13 @@
         Switch off heads in the first model
         <input type="text" id="ablate" placeholder="e.g. L6H10, L7H5 (or shift-click heads in a head map)"></label>
     </div>
+    <div class="row hidden" id="steerRow">
+      <label class="grow" title="Click a row in a Features view to pin a feature, then move this. The strength is in the feature's own units, so its saved peak is the strongest it ever fired.">
+        Steer with feature <b id="steerFeature"></b>
+        <input type="range" id="steer" min="-30" max="30" step="1" value="0">
+        <span id="steerVal">off</span></label>
+      <button class="btn ghost" id="steerOff" title="Stop steering, and forget the feature">Clear</button>
+    </div>
     <div class="actions" id="genActions">
       <button class="btn" id="go">Generate</button>
       <button class="btn ghost" id="stop" disabled>Stop</button>
@@ -241,6 +248,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let models = [], mode = "story", running = [];
+let steering = null;          // {sae, feature, label}: the feature pinned last in a Features view
 const cardData = new Map();   // card element -> its tokens, ids and attention state
 const PREFER = {  // the model each tab starts on, best first
   story: ["stories/stories_gpt_384w6l_full.pt", "stories/stories_gpt_384w6l.pt"],
@@ -293,6 +301,8 @@ $("tabs").onclick = e => { if (e.target.dataset.mode) setMode(e.target.dataset.m
 $("compare").onchange = () => $("modelB-wrap").classList.toggle("hidden", !$("compare").checked);
 $("temp").oninput = () => $("tempVal").textContent = (+$("temp").value).toFixed(2);
 $("dice").onclick = () => $("seed").value = Math.floor(Math.random() * 1e6);
+$("steer").oninput = syncSteer;
+$("steerOff").onclick = () => { steering = null; $("steer").value = 0; syncSteer(); };
 $("tokenView").onchange = () => {
   document.body.classList.toggle("tokens-view", $("tokenView").checked);
   for (const s of document.querySelectorAll(".tokens span")) showPiece(s);
@@ -335,7 +345,18 @@ function request() {
     after_eot: mode === "story" ? $("afterEot").checked : false,
     temperature: +$("temp").value, max_tokens: +$("maxTokens").value, seed: +$("seed").value,
     ablate: parseHeads($("ablate").value),
+    steer: steering && +$("steer").value ? { ...steering, strength: +$("steer").value } : null,
   };
+}
+
+// The feature to steer with, and at what strength. 0 on the slider is off, so pinning a
+// feature does not change what the next write does until the slider moves.
+function syncSteer() {
+  $("steerRow").classList.toggle("hidden", !steering);
+  if (!steering) return;
+  $("steerFeature").textContent = `#${steering.feature}` + (steering.label ? ` (${steering.label})` : "");
+  const s = +$("steer").value;
+  $("steerVal").textContent = s ? (s > 0 ? `+${s}` : `${s}`) : "off";
 }
 
 // With Samples above 1: the same request with that many random seeds, one after
@@ -411,6 +432,8 @@ async function run(card, req) {
           card.el.querySelector(".meta").textContent = `${fmtParams(msg.params)} params, ${msg.shape}`;
           card.layers = msg.layers; card.heads = msg.heads; card.ablate = msg.ablate || [];
           if (card.ablate.length) card.el.querySelector(".meta").textContent += `, heads off: ${card.ablate.map(headName).join(" ")}`;
+          if (msg.steer && req.steer) card.el.querySelector(".meta").textContent +=
+            `, steering feature ${req.steer.feature} at ${req.steer.strength > 0 ? "+" : ""}${req.steer.strength}`;
           const chat = req.mode !== "story";
           card.el.querySelector(".request").classList.toggle("hidden", !chat);
           msg.prompt_ids.forEach((id, i) => {
@@ -925,9 +948,21 @@ async function features(card, panel, opts) {
       labels[i] = got.label;
       note.textContent = got.label ? "saved" : "cleared";
       panel.querySelector(".examples h4").textContent = `Feature ${i}${got.label ? `: ${got.label}` : ""}`;
+      if (steering && steering.sae === data.sae && steering.feature === i) {   // (feature numbers repeat across layers)
+        steering.label = got.label; syncSteer();
+      }
     };
     panel.querySelector(".lb").onclick = save;
     input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); save(); } };
+    steering = { sae: data.sae, feature: i, label: labels[i] || "" };
+    // The strongest this feature ever fired (in the saved contexts) is its natural full
+    // strength, so reach it even when it is larger than the default +-30: a strength past
+    // the peak leaves the text the model learned.
+    const span = Math.max(30, Math.ceil(examples(i)[0]?.[0] ?? top));
+    $("steer").min = -span;
+    $("steer").max = span;
+    $("steer").value = 0;
+    syncSteer();
   };
 }
 

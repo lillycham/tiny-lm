@@ -27,7 +27,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -39,6 +39,7 @@ from core import gpt
 from stories import instruct_sft
 from stories import sft
 from tools import sae as sae_tools
+from tools import steer as steer_tools
 from tools.interp import Ablate
 from web import web_data
 from core import word_bpe
@@ -201,13 +202,16 @@ def free_cache(device):
         torch.mps.empty_cache()
 
 @torch.no_grad()
-def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None, ablate=()):
+def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None, ablate=(), steer=None):
     """Yield one dict per new token, up to n tokens, ending early at <|endoftext|>.
 
     Each dict has the token's id, its piece, "text" (the new characters it completes:
     empty while a character is still half made), its probability p, the entropy H of
     the whole distribution (in nats: 0 = certain), and the top alternatives. p is the model's own probability, at temperature 1, whatever the
     temperature used to choose. Temperature 0 always takes the most likely token.
+
+    steer is (layer, vector, strength) from tools/steer.py, or None: it adds the direction
+    of one SAE feature to every token, so the text shows what that feature pushes for.
     """
     lock = lock or threading.RLock()
     device = next(model.parameters()).device
@@ -215,7 +219,8 @@ def sample(model, tok, prompt_ids, n, temperature=0.8, seed=0, top=5, lock=None,
     text = codecs.getincrementaldecoder("utf-8")(errors="replace")
     ids = list(prompt_ids)
     for _ in range(n):
-        with lock, ablated(model, ablate):
+        with lock, ablated(model, ablate), (
+                steer_tools.steering(model, *steer) if steer else nullcontext()):
             x = torch.tensor([ids[-model.block:]], device=device)
             logits = model(x, last_only=True)[0, -1].float().cpu()
             free_cache(device)
@@ -579,6 +584,31 @@ class Handler(BaseHTTPRequestHandler):
         sae_tools.set_label(self.models.root / name, i, text)
         return self.send_json({"feature": i, "label": text.strip()})
 
+    def steering(self, req, model):
+        """(layer, vector, strength) for the feature pinned in a Features view, or None.
+
+        The vector is what one unit of that feature adds to the residual stream
+        (tools/steer.py), so a strength near the peak in the saved contexts means "as if
+        the feature fired that hard". Zero, or no feature, gives the model's own text. The
+        SAE must be one of this model's, as for features, so a path cannot point elsewhere."""
+        spec = req.get("steer")
+        if not spec:
+            return None
+        strength = float(spec.get("strength", 0))
+        if strength == 0:
+            return None
+        name = spec["sae"]
+        if name not in [s["path"] for s in list_saes(self.models.root, req["model"])]:
+            raise ValueError(f"No SAE {name!r} for {req['model']}")
+        sae, layer, _ = self.models.get_sae(name)
+        if not 0 <= layer < len(model.blocks):
+            raise ValueError(f"The SAE steers after block {layer}, and this model has {len(model.blocks)}")
+        feature = int(spec["feature"])
+        if not 0 <= feature < sae.config["M"]:
+            raise ValueError(f"No feature {feature} in this SAE")
+        device = next(model.parameters()).device
+        return layer, steer_tools.feature_direction(sae, feature, device), strength
+
     def generate(self, req):
         """Stream one JSON object per line: start, then one per token, then end."""
         model, tok = self.models.get(req["model"]), self.toks[family(req["model"])]
@@ -593,6 +623,7 @@ class Handler(BaseHTTPRequestHandler):
         n = max(1, min(int(req.get("max_tokens", 300)), MAX_TOKENS))
         temperature, seed = float(req.get("temperature", 0.8)), int(req.get("seed", 0))
         off = parse_heads(req.get("ablate"), model)
+        steer = self.steering(req, model)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
@@ -604,11 +635,12 @@ class Handler(BaseHTTPRequestHandler):
             write({"type": "start", "prompt": prompt, "prompt_ids": prompt_ids,
                    "prompt_pieces": [piece(tok, i) for i in prompt_ids],
                    "params": sum(p.numel() for p in model.parameters()),
-                   "layers": c["layers"], "heads": c["heads"], "ablate": off,
+                   "layers": c["layers"], "heads": c["heads"], "ablate": off, "steer": bool(steer),
                    "shape": f"{c['layers']} layers x {c['heads']} heads, width {c['emb']}"
                             + (", smeared keys" if c.get("smear") else "")})
             t, count, reason = time.time(), 0, "length"
-            for token in sample(model, tok, prompt_ids, n, temperature, seed, lock=self.models.lock, ablate=off):
+            for token in sample(model, tok, prompt_ids, n, temperature, seed, lock=self.models.lock,
+                                ablate=off, steer=steer):
                 count += 1
                 if token["id"] == tok.eot_id:
                     reason = "eot"

@@ -24,6 +24,7 @@ clean measurement: it shows the direction of the change, not its size.
 """
 import argparse
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -39,21 +40,26 @@ def feature_direction(sae, index, device="cpu"):
     whole of f by it. A strength of s is then "as if this feature fired at s"."""
     return (sae.dec.weight[:, int(index)] / sae.scale).detach().to(device)
 
-@torch.no_grad()
-def steered(model, layer, vector, strength, run):
-    """Run `run()` with strength * vector added to the residual stream after block `layer`.
+@contextmanager
+def steering(model, layer, vector, strength):
+    """Add strength * vector to the residual stream after block `layer` while inside.
 
     A forward hook that returns a value replaces the block's output, so every block after
-    this one sees the steered stream, and so does the SAE. The hook goes on every token,
-    the prompt included: it is the context that the next token is read from that matters."""
+    this one sees the steered stream, and so does the SAE. It goes on every token, the
+    prompt included: the context that the next token is read from is what matters."""
     def add(module, inputs, output):
         return output + strength * vector
 
     handle = model.blocks[layer].register_forward_hook(add)
     try:
-        return run()
+        yield
     finally:
         handle.remove()
+
+def steered(model, layer, vector, strength, run):
+    """Run `run()` inside steering(), and return what it returns."""
+    with steering(model, layer, vector, strength):
+        return run()
 
 def write(model, tok, prompt, n, temperature=1.0, stop=None, steer=None):
     """Sample n tokens after `prompt`. steer is (layer, vector, strength), or None for the
